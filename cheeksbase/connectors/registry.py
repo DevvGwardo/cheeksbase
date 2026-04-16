@@ -7,7 +7,7 @@ from typing import Any
 
 import yaml
 
-from dataforge.core.config import get_connectors_dir
+from cheeksbase.core.config import get_connectors_dir
 
 
 # Built-in connector configs directory

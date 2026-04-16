@@ -1,4 +1,4 @@
-"""Configuration management for DataForge."""
+"""Configuration management for Cheeksbase."""
 
 from __future__ import annotations
 
@@ -10,31 +10,31 @@ from typing import Any
 import yaml
 
 
-DEFAULT_DIR = Path.home() / ".dataforge"
+DEFAULT_DIR = Path.home() / ".cheeksbase"
 CONFIG_FILE = "config.yaml"
-DB_FILE = "dataforge.duckdb"
+DB_FILE = "cheeksbase.duckdb"
 
 
-def get_dataforge_dir() -> Path:
-    return Path(os.environ.get("DATAFORGE_DIR", DEFAULT_DIR))
+def get_cheeksbase_dir() -> Path:
+    return Path(os.environ.get("CHEEKSBASE_DIR", DEFAULT_DIR))
 
 
 def get_config_path() -> Path:
-    return get_dataforge_dir() / CONFIG_FILE
+    return get_cheeksbase_dir() / CONFIG_FILE
 
 
 def get_db_path() -> Path | str:
-    return get_dataforge_dir() / DB_FILE
+    return get_cheeksbase_dir() / DB_FILE
 
 
 def get_connectors_dir() -> Path:
     """Directory for connector YAML configs."""
-    return get_dataforge_dir() / "connectors"
+    return get_cheeksbase_dir() / "connectors"
 
 
 def get_cache_dir() -> Path:
     """Directory for cached data."""
-    return get_dataforge_dir() / "cache"
+    return get_cheeksbase_dir() / "cache"
 
 
 def load_config() -> dict[str, Any]:
@@ -49,7 +49,7 @@ def load_config() -> dict[str, Any]:
         import click
         click.echo(f"Error: broken config file at {path}", err=True)
         click.echo(f"YAML parse error: {e}", err=True)
-        click.echo("Fix the file manually or delete it and run `dataforge init`.", err=True)
+        click.echo("Fix the file manually or delete it and run `cheeksbase init`.", err=True)
         raise SystemExit(1)
     return config
 
@@ -64,9 +64,9 @@ def save_config(config: dict[str, Any]) -> None:
     path.chmod(0o600)
 
 
-def init_dataforge() -> Path:
-    """Create the dataforge directory and default config. Returns the directory path."""
-    ddir = get_dataforge_dir()
+def init_cheeksbase() -> Path:
+    """Create the cheeksbase directory and default config. Returns the directory path."""
+    ddir = get_cheeksbase_dir()
     ddir.mkdir(parents=True, exist_ok=True)
     (ddir / "connectors").mkdir(exist_ok=True)
     (ddir / "cache").mkdir(exist_ok=True)

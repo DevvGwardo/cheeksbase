@@ -1,4 +1,4 @@
-"""MCP server for DataForge — exposes query, describe, and sync tools."""
+"""MCP server for Cheeksbase — exposes query, describe, and sync tools."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from typing import Annotated, Any
 from pydantic import Field
 from mcp.server.fastmcp import FastMCP
 
-from dataforge.core.db import DataForgeDB
-from dataforge.core.query import QueryEngine
+from cheeksbase.core.db import CheeksbaseDB
+from cheeksbase.core.query import QueryEngine
 
 
 def _build_instructions(engine: QueryEngine) -> str:
@@ -19,12 +19,12 @@ def _build_instructions(engine: QueryEngine) -> str:
 
     if not connectors:
         return (
-            "This is a DataForge instance with no data loaded yet. "
-            "The user needs to run `dataforge add <connector>` and `dataforge sync` first."
+            "This is a Cheeksbase instance with no data loaded yet. "
+            "The user needs to run `cheeksbase add <connector>` and `cheeksbase sync` first."
         )
 
     lines = [
-        "You have access to a DataForge database — business data synced from multiple connectors "
+        "You have access to a Cheeksbase database — business data synced from multiple connectors "
         "into a single SQL database (DuckDB dialect).",
         "",
     ]
@@ -56,16 +56,16 @@ def _build_instructions(engine: QueryEngine) -> str:
 
 def create_server() -> FastMCP:
     """Create the FastMCP server."""
-    with DataForgeDB() as db:
+    with CheeksbaseDB() as db:
         engine = QueryEngine(db)
         instructions = _build_instructions(engine)
         connectors = engine.list_connectors().get("connectors", [])
 
-    print("DataForge MCP server ready.", flush=True)
+    print("Cheeksbase MCP server ready.", flush=True)
     for s in connectors:
         print(f"  {s['name']}: {s['table_count']} tables, {s['total_rows']:,} rows", flush=True)
 
-    server = FastMCP("dataforge", instructions=instructions)
+    server = FastMCP("cheeksbase", instructions=instructions)
 
     @server.tool()
     def query(
@@ -73,7 +73,7 @@ def create_server() -> FastMCP:
         max_rows: Annotated[int, Field(description="Maximum rows to return", ge=1, le=10000)] = 200,
     ) -> str:
         """Execute a SQL query against the database. Use `describe` first to understand table columns and data types."""
-        with DataForgeDB() as db:
+        with CheeksbaseDB() as db:
             eng = QueryEngine(db)
             result = eng.execute(sql, max_rows=max_rows)
         return json.dumps(result, indent=2, default=str)
@@ -81,7 +81,7 @@ def create_server() -> FastMCP:
     @server.tool()
     def list_connectors() -> str:
         """List all connected data connectors with their tables, row counts, and last sync time."""
-        with DataForgeDB() as db:
+        with CheeksbaseDB() as db:
             eng = QueryEngine(db)
             result = eng.list_connectors()
         return json.dumps(result, indent=2, default=str)
@@ -91,7 +91,7 @@ def create_server() -> FastMCP:
         table: Annotated[str, Field(description="Table to describe, e.g. 'stripe.customers' or 'hubspot.contacts'")],
     ) -> str:
         """Describe a table's columns, types, annotations, and sample rows."""
-        with DataForgeDB() as db:
+        with CheeksbaseDB() as db:
             eng = QueryEngine(db)
             result = eng.describe_table(table)
         return json.dumps(result, indent=2, default=str)
@@ -101,8 +101,8 @@ def create_server() -> FastMCP:
         connector: Annotated[str, Field(description="Name of the connector to re-sync (e.g. 'stripe', 'hubspot')")],
     ) -> str:
         """Re-sync a connector to get fresh data. Use when data is stale or you need up-to-date results before querying."""
-        from dataforge.core.config import get_connectors
-        from dataforge.core.sync import SyncEngine
+        from cheeksbase.core.config import get_connectors
+        from cheeksbase.core.sync import SyncEngine
         
         connectors = get_connectors()
         if connector not in connectors:
@@ -110,7 +110,7 @@ def create_server() -> FastMCP:
         
         connector_config = connectors[connector]
         
-        with DataForgeDB() as db:
+        with CheeksbaseDB() as db:
             sync_engine = SyncEngine(db)
             result = sync_engine.sync(connector, connector_config)
         
@@ -130,7 +130,7 @@ def create_server() -> FastMCP:
         """Annotate a table or column with metadata like descriptions, PII flags, etc."""
         parts = target.split(".")
         
-        with DataForgeDB() as db:
+        with CheeksbaseDB() as db:
             if len(parts) == 2:
                 schema, table = parts
                 if key == "description":
@@ -142,7 +142,7 @@ def create_server() -> FastMCP:
                 schema, table, column = parts
                 if key in ("description", "note"):
                     db.conn.execute(
-                        f"INSERT INTO _dataforge.columns "
+                        f"INSERT INTO _cheeksbase.columns "
                         f"(connector_name, schema_name, table_name, column_name, {key}) "
                         f"VALUES (?, ?, ?, ?, ?) "
                         f"ON CONFLICT (connector_name, schema_name, table_name, column_name) "
@@ -171,26 +171,26 @@ def create_server() -> FastMCP:
             if tool_name == "query":
                 sql = args.get("sql", "")
                 max_rows = args.get("max_rows", 200)
-                with DataForgeDB() as db:
+                with CheeksbaseDB() as db:
                     eng = QueryEngine(db)
                     result = eng.execute(sql, max_rows=max_rows)
                 results.append({"tool": tool_name, "result": result})
             
             elif tool_name == "describe":
                 table = args.get("table", "")
-                with DataForgeDB() as db:
+                with CheeksbaseDB() as db:
                     eng = QueryEngine(db)
                     result = eng.describe_table(table)
                 results.append({"tool": tool_name, "result": result})
             
             elif tool_name == "sync":
                 connector = args.get("connector", "")
-                from dataforge.core.config import get_connectors
-                from dataforge.core.sync import SyncEngine
+                from cheeksbase.core.config import get_connectors
+                from cheeksbase.core.sync import SyncEngine
                 
                 connectors = get_connectors()
                 if connector in connectors:
-                    with DataForgeDB() as db:
+                    with CheeksbaseDB() as db:
                         sync_engine = SyncEngine(db)
                         result = sync_engine.sync(connector, connectors[connector])
                     results.append({"tool": tool_name, "result": {

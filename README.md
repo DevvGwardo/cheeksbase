@@ -1,29 +1,29 @@
-# 🔨 DataForge
+# 🔨 Cheeksbase
 
 **Agent-first data platform with YAML-only connectors.**
 
-DataForge syncs data from APIs, databases, and files into a unified SQL database (DuckDB), making it easy for AI agents to query and write back to your data sources.
+Cheeksbase syncs data from APIs, databases, and files into a unified SQL database (DuckDB), making it easy for AI agents to query and write back to your data sources.
 
 ## Quick Start
 
 ```bash
 # Install
-pip install dataforge
+pip install cheeksbase
 
 # Initialize
-dataforge init
+cheeksbase init
 
 # Add a connector
-dataforge connector add stripe --api-key sk_test_...
+cheeksbase connector add stripe --api-key sk_test_...
 
 # Sync data
-dataforge sync stripe
+cheeksbase sync stripe
 
 # Query
-dataforge query "SELECT * FROM stripe.customers LIMIT 10"
+cheeksbase query "SELECT * FROM stripe.customers LIMIT 10"
 
 # Start MCP server
-dataforge serve
+cheeksbase serve
 ```
 
 ## Features
@@ -39,7 +39,7 @@ dataforge serve
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                   DataForge Core                     │
+│                   Cheeksbase Core                     │
 ├─────────────────────────────────────────────────────┤
 │  MCP Server  │  Query Engine  │  Sync Engine  │  Cache │
 ├─────────────────────────────────────────────────────┤
@@ -52,7 +52,7 @@ dataforge serve
 
 ## Connectors
 
-DataForge supports multiple connector types:
+Cheeksbase supports multiple connector types:
 
 ### REST APIs
 ```yaml
@@ -96,7 +96,7 @@ format: csv
 
 ## MCP Integration
 
-DataForge exposes an MCP server for AI agents:
+Cheeksbase exposes an MCP server for AI agents:
 
 ```python
 # Agent can use these tools:
@@ -110,8 +110,8 @@ DataForge exposes an MCP server for AI agents:
 ## Development
 
 ```bash
-git clone https://github.com/DevvGwardo/dataforge
-cd dataforge
+git clone https://github.com/DevvGwardo/cheeksbase
+cd cheeksbase
 pip install -e ".[dev]"
 pytest
 ```

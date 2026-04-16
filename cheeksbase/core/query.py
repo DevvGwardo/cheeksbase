@@ -8,13 +8,13 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from dataforge.core.db import DataForgeDB, META_SCHEMA
+from cheeksbase.core.db import CheeksbaseDB, META_SCHEMA
 
 
 class QueryEngine:
     """Execute SQL queries with caching and freshness checks."""
     
-    def __init__(self, db: DataForgeDB):
+    def __init__(self, db: CheeksbaseDB):
         self.db = db
         self._query_cache: dict[str, Any] = {}
         self._cache_ttl = 300  # 5 minutes default TTL
@@ -43,7 +43,7 @@ class QueryEngine:
         # Route mutations to the mutation engine
         first_word = sql.strip().split()[0].upper() if sql.strip() else ""
         if first_word in ("UPDATE", "INSERT", "DELETE", "DROP", "ALTER", "TRUNCATE", "CREATE", "GRANT", "REVOKE"):
-            from dataforge.mutations.engine import MutationEngine
+            from cheeksbase.mutations.engine import MutationEngine
             mutation_engine = MutationEngine(self.db)
             return mutation_engine.handle_sql(sql)
 
@@ -125,11 +125,11 @@ class QueryEngine:
             freshness = self.get_freshness(schema)
             if freshness.get("is_stale"):
                 # Try to refresh the connector
-                from dataforge.core.config import get_connectors
+                from cheeksbase.core.config import get_connectors
                 connectors = get_connectors()
                 if schema in connectors:
                     try:
-                        from dataforge.core.sync import SyncEngine
+                        from cheeksbase.core.sync import SyncEngine
                         sync_engine = SyncEngine(self.db)
                         sync_engine.sync(schema, connectors[schema])
                     except Exception:
@@ -200,7 +200,7 @@ class QueryEngine:
 
         row_count = self.db.get_row_count(schema, table)
 
-        # Get annotations from _dataforge.columns
+        # Get annotations from _cheeksbase.columns
         annotations = self.db.get_column_annotations(schema, table)
 
         col_info = []

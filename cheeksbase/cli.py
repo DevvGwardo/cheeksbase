@@ -1,4 +1,4 @@
-"""CLI for DataForge."""
+"""CLI for Cheeksbase."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ import sys
 
 import click
 
-from dataforge import __version__
-from dataforge.core.config import (
-    init_dataforge,
+from cheeksbase import __version__
+from cheeksbase.core.config import (
+    init_cheeksbase,
     get_db_path,
     get_connectors_dir,
     add_connector,
@@ -21,22 +21,22 @@ from dataforge.core.config import (
 @click.group()
 @click.version_option(version=__version__)
 def cli():
-    """🔨 DataForge — agent-first data platform."""
+    """🔨 Cheeksbase — agent-first data platform."""
     pass
 
 
 @cli.command()
 def init():
-    """Initialize DataForge (create config directory and database)."""
-    ddir = init_dataforge()
+    """Initialize Cheeksbase (create config directory and database)."""
+    ddir = init_cheeksbase()
     
     # Touch the database to create it
-    from dataforge.core.db import DataForgeDB
-    db = DataForgeDB()
+    from cheeksbase.core.db import CheeksbaseDB
+    db = CheeksbaseDB()
     _ = db.conn  # triggers initialization
     db.close()
     
-    click.echo(f"DataForge initialized at {ddir}")
+    click.echo(f"Cheeksbase initialized at {ddir}")
     click.echo(f"Database: {get_db_path()}")
 
 
@@ -66,12 +66,12 @@ def add(
     """Add a new data connector.
     
     Examples:
-      dataforge add stripe --api-key sk_test_...
-      dataforge add postgres --connection-string postgresql://...
-      dataforge add csv_data --path ./data/*.csv --format csv
+      cheeksbase add stripe --api-key sk_test_...
+      cheeksbase add postgres --connection-string postgresql://...
+      cheeksbase add csv_data --path ./data/*.csv --format csv
     """
     # Import here to avoid circular imports
-    from dataforge.connectors.registry import get_connector_config, get_available_connectors
+    from cheeksbase.connectors.registry import get_connector_config, get_available_connectors
     
     # Check if connector type exists
     available = get_available_connectors()
@@ -116,8 +116,8 @@ def add(
     
     # Show next steps
     click.echo("\nNext steps:")
-    click.echo(f"  dataforge sync {name}       # sync data from this connector")
-    click.echo(f"  dataforge query \"SELECT * FROM {name}.<table> LIMIT 10\"  # query the data")
+    click.echo(f"  cheeksbase sync {name}       # sync data from this connector")
+    click.echo(f"  cheeksbase query \"SELECT * FROM {name}.<table> LIMIT 10\"  # query the data")
 
 
 @cli.command()
@@ -141,17 +141,17 @@ def sync(name: str | None, sync_all: bool, force: bool):
     """Sync data from connectors.
     
     Examples:
-      dataforge sync stripe          # sync stripe connector
-      dataforge sync --all           # sync all connectors
-      dataforge sync stripe --force  # force sync even if fresh
+      cheeksbase sync stripe          # sync stripe connector
+      cheeksbase sync --all           # sync all connectors
+      cheeksbase sync stripe --force  # force sync even if fresh
     """
-    from dataforge.core.db import DataForgeDB
-    from dataforge.core.sync import SyncEngine
+    from cheeksbase.core.db import CheeksbaseDB
+    from cheeksbase.core.sync import SyncEngine
     
     connectors = get_connectors()
     
     if not connectors:
-        click.echo("No connectors configured. Add one with: dataforge add <type>", err=True)
+        click.echo("No connectors configured. Add one with: cheeksbase add <type>", err=True)
         sys.exit(1)
     
     if sync_all:
@@ -165,7 +165,7 @@ def sync(name: str | None, sync_all: bool, force: bool):
         click.echo("Please specify a connector name or use --all", err=True)
         sys.exit(1)
     
-    with DataForgeDB() as db:
+    with CheeksbaseDB() as db:
         sync_engine = SyncEngine(db)
         
         for connector_name in sync_list:
@@ -189,13 +189,13 @@ def query(sql: str, max_rows: int, pretty: bool, no_cache: bool):
     """Execute a SQL query.
     
     Examples:
-      dataforge query "SELECT * FROM stripe.customers LIMIT 10"
-      dataforge query "SELECT COUNT(*) FROM hubspot.contacts" --pretty
+      cheeksbase query "SELECT * FROM stripe.customers LIMIT 10"
+      cheeksbase query "SELECT COUNT(*) FROM hubspot.contacts" --pretty
     """
-    from dataforge.core.db import DataForgeDB
-    from dataforge.core.query import QueryEngine
+    from cheeksbase.core.db import CheeksbaseDB
+    from cheeksbase.core.query import QueryEngine
     
-    with DataForgeDB() as db:
+    with CheeksbaseDB() as db:
         engine = QueryEngine(db)
         result = engine.execute(sql, max_rows=max_rows, use_cache=not no_cache)
         
@@ -216,13 +216,13 @@ def describe(table: str, pretty: bool):
     """Describe a table's schema and metadata.
     
     Examples:
-      dataforge describe stripe.customers
-      dataforge describe customers --pretty
+      cheeksbase describe stripe.customers
+      cheeksbase describe customers --pretty
     """
-    from dataforge.core.db import DataForgeDB
-    from dataforge.core.query import QueryEngine
+    from cheeksbase.core.db import CheeksbaseDB
+    from cheeksbase.core.query import QueryEngine
     
-    with DataForgeDB() as db:
+    with CheeksbaseDB() as db:
         engine = QueryEngine(db)
         result = engine.describe_table(table)
         
@@ -240,10 +240,10 @@ def describe(table: str, pretty: bool):
 @click.option("--pretty", is_flag=True, help="Pretty print results")
 def connectors(pretty: bool):
     """List all configured connectors."""
-    from dataforge.core.db import DataForgeDB
-    from dataforge.core.query import QueryEngine
+    from cheeksbase.core.db import CheeksbaseDB
+    from cheeksbase.core.query import QueryEngine
     
-    with DataForgeDB() as db:
+    with CheeksbaseDB() as db:
         engine = QueryEngine(db)
         result = engine.list_connectors()
         
@@ -258,9 +258,9 @@ def connectors(pretty: bool):
 @click.option("--host", default="localhost", help="Host to bind to")
 def serve(port: int, host: str):
     """Start the MCP server for AI agents."""
-    from dataforge.mcp.server import run_server
+    from cheeksbase.mcp.server import run_server
     
-    click.echo(f"Starting DataForge MCP server on {host}:{port}")
+    click.echo(f"Starting Cheeksbase MCP server on {host}:{port}")
     run_server(host=host, port=port)
 
 
@@ -268,7 +268,7 @@ def serve(port: int, host: str):
 @click.option("--available", is_flag=True, help="Show available connector types")
 def sources(available: bool):
     """List data sources."""
-    from dataforge.connectors.registry import get_available_connectors, get_connector_info
+    from cheeksbase.connectors.registry import get_available_connectors, get_connector_info
     
     if available:
         connector_types = get_available_connectors()
@@ -281,7 +281,7 @@ def sources(available: bool):
         # Show configured connectors
         connectors = get_connectors()
         if not connectors:
-            click.echo("No connectors configured. Add one with: dataforge add <type>")
+            click.echo("No connectors configured. Add one with: cheeksbase add <type>")
             return
         
         click.echo("Configured connectors:")

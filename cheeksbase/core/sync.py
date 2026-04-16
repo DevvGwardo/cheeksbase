@@ -12,7 +12,7 @@ from typing import Any
 
 import duckdb
 
-from dataforge.core.db import DataForgeDB, META_SCHEMA
+from cheeksbase.core.db import CheeksbaseDB, META_SCHEMA
 
 
 @dataclass
@@ -31,7 +31,7 @@ class SyncResult:
 class SyncEngine:
     """Syncs data from sources into DuckDB."""
     
-    def __init__(self, db: DataForgeDB):
+    def __init__(self, db: CheeksbaseDB):
         self.db = db
         self._sync_t0: float | None = None
 
@@ -112,7 +112,7 @@ class SyncEngine:
     ) -> SyncResult:
         """Sync data from a REST API."""
         import httpx
-        from dataforge.connectors.registry import get_connector_config
+        from cheeksbase.connectors.registry import get_connector_config
 
         # Load connector config from YAML
         connector_config = get_connector_config(source_name)
@@ -297,7 +297,7 @@ class SyncEngine:
     ) -> SyncResult:
         """Sync data from a GraphQL API."""
         import httpx
-        from dataforge.connectors.registry import get_connector_config
+        from cheeksbase.connectors.registry import get_connector_config
 
         # Load connector config from YAML
         connector_config = get_connector_config(source_name)

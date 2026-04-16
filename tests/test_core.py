@@ -1,63 +1,63 @@
-"""Tests for DataForge core functionality."""
+"""Tests for Cheeksbase core functionality."""
 
 import pytest
 from pathlib import Path
 import tempfile
 import shutil
 
-from dataforge.core.config import init_dataforge, get_db_path, add_connector, get_connectors
-from dataforge.core.db import DataForgeDB
-from dataforge.core.query import QueryEngine
+from cheeksbase.core.config import init_cheeksbase, get_db_path, add_connector, get_connectors
+from cheeksbase.core.db import CheeksbaseDB
+from cheeksbase.core.query import QueryEngine
 
 
 @pytest.fixture
-def temp_dataforge_dir():
-    """Create a temporary DataForge directory for testing."""
+def temp_cheeksbase_dir():
+    """Create a temporary Cheeksbase directory for testing."""
     temp_dir = tempfile.mkdtemp()
-    original_dir = Path.home() / ".dataforge"
+    original_dir = Path.home() / ".cheeksbase"
     
     # Monkey patch the default directory
-    import dataforge.core.config
-    original_default = dataforge.core.config.DEFAULT_DIR
-    dataforge.core.config.DEFAULT_DIR = Path(temp_dir)
+    import cheeksbase.core.config
+    original_default = cheeksbase.core.config.DEFAULT_DIR
+    cheeksbase.core.config.DEFAULT_DIR = Path(temp_dir)
     
     yield Path(temp_dir)
     
     # Restore original
-    dataforge.core.config.DEFAULT_DIR = original_default
+    cheeksbase.core.config.DEFAULT_DIR = original_default
     shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-def test_init_dataforge(temp_dataforge_dir):
-    """Test DataForge initialization."""
-    ddir = init_dataforge()
+def test_init_cheeksbase(temp_cheeksbase_dir):
+    """Test Cheeksbase initialization."""
+    ddir = init_cheeksbase()
     assert ddir.exists()
     assert (ddir / "config.yaml").exists()
     assert (ddir / "connectors").exists()
     assert (ddir / "cache").exists()
 
 
-def test_database_creation(temp_dataforge_dir):
+def test_database_creation(temp_cheeksbase_dir):
     """Test database creation and metadata tables."""
-    init_dataforge()
+    init_cheeksbase()
     
-    with DataForgeDB() as db:
+    with CheeksbaseDB() as db:
         # Check that metadata schema exists
         schemas = db.get_schemas()
-        assert "_dataforge" in schemas
+        assert "_cheeksbase" in schemas
         
         # Check that metadata tables exist
-        tables = db.get_tables("_dataforge")
+        tables = db.get_tables("_cheeksbase")
         expected_tables = ["sync_log", "tables", "columns", "live_rows", "mutations", "relationships", "metadata"]
         for table in expected_tables:
             assert table in tables
 
 
-def test_query_engine(temp_dataforge_dir):
+def test_query_engine(temp_cheeksbase_dir):
     """Test query engine functionality."""
-    init_dataforge()
+    init_cheeksbase()
     
-    with DataForgeDB() as db:
+    with CheeksbaseDB() as db:
         # Create a test table
         db.conn.execute('CREATE SCHEMA test_schema')
         db.conn.execute('''
@@ -83,9 +83,9 @@ def test_query_engine(temp_dataforge_dir):
         assert result["columns"] == ["id", "name", "email"]
 
 
-def test_connectors_config(temp_dataforge_dir):
+def test_connectors_config(temp_cheeksbase_dir):
     """Test connector configuration."""
-    init_dataforge()
+    init_cheeksbase()
     
     # Add a connector
     add_connector("test_connector", "rest_api", {"api_key": "test123"})

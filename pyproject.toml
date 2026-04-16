@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "dataforge"
+name = "cheeksbase"
 version = "0.1.0"
 description = "Agent-first data platform with YAML-only connectors"
 readme = "README.md"
@@ -27,10 +27,10 @@ dev = [
 ]
 
 [project.scripts]
-dataforge = "dataforge.cli:cli"
+cheeksbase = "cheeksbase.cli:cli"
 
 [tool.hatch.build.targets.wheel]
-packages = ["dataforge"]
+packages = ["cheeksbase"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

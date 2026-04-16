@@ -45,7 +45,7 @@ venv.bak/
 ehthumbs.db
 Thumbs.db
 
-# DataForge specific
+# Cheeksbase specific
 *.duckdb
 *.duckdb.wal
 .cache/

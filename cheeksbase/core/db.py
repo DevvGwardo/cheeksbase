@@ -1,4 +1,4 @@
-"""DuckDB storage layer for DataForge."""
+"""DuckDB storage layer for Cheeksbase."""
 
 from __future__ import annotations
 
@@ -7,10 +7,10 @@ from typing import Any
 
 import duckdb
 
-from dataforge.core.config import get_db_path
+from cheeksbase.core.config import get_db_path
 
-# Internal schema for dataforge metadata
-META_SCHEMA = "_dataforge"
+# Internal schema for cheeksbase metadata
+META_SCHEMA = "_cheeksbase"
 
 
 INIT_SQL = f"""
@@ -109,7 +109,7 @@ CREATE TABLE IF NOT EXISTS {META_SCHEMA}.metadata (
 _META_TABLES = ["sync_log", "tables", "columns", "live_rows", "mutations", "relationships", "metadata"]
 
 
-class DataForgeDB:
+class CheeksbaseDB:
     """DuckDB wrapper with metadata management."""
     
     def __init__(self, db_path: Path | str | None = None):
