@@ -1,0 +1,25 @@
+# HubSpot CRM Connector
+name: hubspot
+type: rest_api
+description: HubSpot CRM (contacts, companies, deals, tickets)
+base_url: https://api.hubapi.com
+auth:
+  type: bearer
+  token_field: hubspot_access_token
+resources:
+  - name: contacts
+    endpoint: /crm/v3/objects/contacts
+    primary_key: id
+    description: CRM contacts
+  - name: companies
+    endpoint: /crm/v3/objects/companies
+    primary_key: id
+    description: CRM companies
+  - name: deals
+    endpoint: /crm/v3/objects/deals
+    primary_key: id
+    description: Sales deals
+  - name: tickets
+    endpoint: /crm/v3/objects/tickets
+    primary_key: id
+    description: Support tickets

@@ -1,0 +1,25 @@
+# GitHub API Connector
+name: github
+type: rest_api
+description: GitHub API (repos, issues, pull requests, commits)
+base_url: https://api.github.com
+auth:
+  type: bearer
+  token_field: github_token
+resources:
+  - name: repos
+    endpoint: /user/repos
+    primary_key: id
+    description: Repositories accessible to the authenticated user
+  - name: issues
+    endpoint: /issues
+    primary_key: id
+    description: Issues assigned to the authenticated user
+  - name: pull_requests
+    endpoint: /repos/{owner}/{repo}/pulls
+    primary_key: id
+    description: Pull requests for a repository
+  - name: commits
+    endpoint: /repos/{owner}/{repo}/commits
+    primary_key: sha
+    description: Commits for a repository

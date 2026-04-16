@@ -1,0 +1,21 @@
+# Slack API Connector
+name: slack
+type: rest_api
+description: Slack API (channels, messages, users)
+base_url: https://slack.com/api
+auth:
+  type: bearer
+  token_field: slack_bot_token
+resources:
+  - name: channels
+    endpoint: /conversations.list
+    primary_key: id
+    description: Slack channels
+  - name: messages
+    endpoint: /conversations.history
+    primary_key: ts
+    description: Messages in a conversation
+  - name: users
+    endpoint: /users.list
+    primary_key: id
+    description: Slack workspace users

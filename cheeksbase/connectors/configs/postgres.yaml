@@ -1,0 +1,8 @@
+# PostgreSQL Database Connector
+name: postgres
+type: database
+description: PostgreSQL database (table discovery via connection string)
+auth:
+  type: connection_string
+  token_field: connection_string
+discover_tables: true
