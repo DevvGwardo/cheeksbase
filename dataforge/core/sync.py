@@ -1,0 +1,455 @@
+"""Sync engine — syncs data from sources into DuckDB."""
+
+from __future__ import annotations
+
+import json
+import sys
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any
+
+import duckdb
+
+from dataforge.core.db import DataForgeDB, META_SCHEMA
+
+
+@dataclass
+class SyncResult:
+    """Result of a sync operation."""
+    connector_name: str
+    connector_type: str
+    tables_synced: int
+    rows_synced: int
+    status: str
+    error: str | None = None
+    row_counts: dict[str, int] = field(default_factory=dict)
+    table_names: list[str] = field(default_factory=list)
+
+
+class SyncEngine:
+    """Syncs data from sources into DuckDB."""
+    
+    def __init__(self, db: DataForgeDB):
+        self.db = db
+        self._sync_t0: float | None = None
+
+    def _log(self, msg: str) -> None:
+        """Write a timestamped line to stderr."""
+        elapsed = time.monotonic() - self._sync_t0 if self._sync_t0 is not None else 0.0
+        line = f"[{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] [{elapsed:7.1f}s] {msg}"
+        print(line, file=sys.stderr)
+
+    def sync(
+        self,
+        source_name: str,
+        source_config: dict[str, Any],
+        on_progress: "Callable[[int, int], None] | None" = None,
+    ) -> SyncResult:
+        """Sync a single source into DuckDB."""
+        source_type = source_config["type"]
+        credentials = source_config.get("credentials", {})
+
+        self._sync_t0 = time.monotonic()
+        self._log(f"=== SYNC START: {source_name} ({source_type}) ===")
+
+        sync_id = None
+        try:
+            sync_id = self.db.log_sync_start(source_name, source_type)
+            
+            # Route to appropriate sync method based on type
+            if source_type == "rest_api":
+                result = self._sync_rest_api(source_name, credentials, source_config)
+            elif source_type == "database":
+                result = self._sync_database(source_name, credentials, source_config)
+            elif source_type == "file":
+                result = self._sync_file(source_name, credentials, source_config)
+            elif source_type == "graphql":
+                result = self._sync_graphql(source_name, credentials, source_config)
+            else:
+                raise ValueError(f"Unknown source type: {source_type}")
+
+            # Update metadata
+            if result.table_names:
+                self.db.update_table_metadata(
+                    source_name, source_name,
+                    row_counts=result.row_counts,
+                )
+
+            # Clear live data
+            self.db.clear_live_rows(source_name)
+
+            self.db.log_sync_end(
+                sync_id,
+                status="success",
+                tables_synced=result.tables_synced,
+                rows_synced=result.rows_synced,
+            )
+
+            self._log(f"=== SYNC COMPLETE: {result.tables_synced} tables, {result.rows_synced:,} rows ===")
+            return result
+
+        except Exception as e:
+            error_msg = str(e)
+            self._log(f"=== SYNC ERROR: {type(e).__name__}: {error_msg} ===")
+            if sync_id is not None:
+                self.db.log_sync_end(sync_id, status="error", error_message=error_msg)
+            return SyncResult(
+                connector_name=source_name,
+                connector_type=source_type,
+                tables_synced=0,
+                rows_synced=0,
+                status="error",
+                error=error_msg,
+            )
+
+    def _sync_rest_api(
+        self,
+        source_name: str,
+        credentials: dict[str, str],
+        config: dict[str, Any],
+    ) -> SyncResult:
+        """Sync data from a REST API."""
+        import httpx
+        from dataforge.connectors.registry import get_connector_config
+
+        # Load connector config from YAML
+        connector_config = get_connector_config(source_name)
+        if not connector_config:
+            raise ValueError(f"No connector config found for {source_name}")
+
+        base_url = connector_config.get("base_url", "")
+        auth_config = connector_config.get("auth", {})
+        resources = connector_config.get("resources", [])
+
+        # Build auth headers
+        headers = self._build_auth_headers(auth_config, credentials)
+
+        total_rows = 0
+        tables_synced = 0
+        row_counts = {}
+        table_names = []
+
+        with httpx.Client(timeout=30.0) as client:
+            for resource in resources:
+                resource_name = resource["name"]
+                endpoint = resource.get("endpoint", f"/{resource_name}")
+                primary_key = resource.get("primary_key", "id")
+
+                self._log(f"  Syncing {resource_name}...")
+
+                try:
+                    # Fetch data from API
+                    url = f"{base_url.rstrip('/')}/{endpoint.lstrip('/')}"
+                    response = client.get(url, headers=headers)
+                    response.raise_for_status()
+
+                    data = response.json()
+                    
+                    # Handle different response formats
+                    if isinstance(data, dict):
+                        # Some APIs wrap results in a key
+                        if len(data) == 1:
+                            key = next(iter(data))
+                            if isinstance(data[key], list):
+                                data = data[key]
+                    
+                    if not isinstance(data, list):
+                        self._log(f"    Warning: Unexpected response format for {resource_name}")
+                        continue
+
+                    if not data:
+                        self._log(f"    No data returned for {resource_name}")
+                        continue
+
+                    # Create schema and table
+                    self.db.conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{source_name}"')
+                    
+                    # Convert to DuckDB table
+                    df = self._list_to_duckdb(data, resource_name, primary_key)
+                    self.db.conn.execute(f'DROP TABLE IF EXISTS "{source_name}"."{resource_name}"')
+                    self.db.conn.execute(f'CREATE TABLE "{source_name}"."{resource_name}" AS SELECT * FROM df')
+                    
+                    row_count = len(data)
+                    total_rows += row_count
+                    tables_synced += 1
+                    row_counts[resource_name] = row_count
+                    table_names.append(resource_name)
+                    
+                    self._log(f"    Synced {row_count:,} rows")
+
+                except Exception as e:
+                    self._log(f"    Error syncing {resource_name}: {e}")
+                    continue
+
+        return SyncResult(
+            connector_name=source_name,
+            connector_type="rest_api",
+            tables_synced=tables_synced,
+            rows_synced=total_rows,
+            status="success",
+            row_counts=row_counts,
+            table_names=table_names,
+        )
+
+    def _sync_database(
+        self,
+        source_name: str,
+        credentials: dict[str, str],
+        config: dict[str, Any],
+    ) -> SyncResult:
+        """Sync data from a database."""
+        connection_string = credentials.get("connection_string", "")
+        if not connection_string:
+            raise ValueError("Database connection string required")
+
+        # For now, just create a view to the remote database
+        # In a full implementation, we'd use SQLAlchemy or similar
+        self.db.conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{source_name}"')
+        
+        # Create a simple view that queries the remote database
+        # This is a simplified implementation
+        self._log(f"  Database sync not fully implemented yet")
+        
+        return SyncResult(
+            connector_name=source_name,
+            connector_type="database",
+            tables_synced=0,
+            rows_synced=0,
+            status="success",
+        )
+
+    def _sync_file(
+        self,
+        source_name: str,
+        credentials: dict[str, str],
+        config: dict[str, Any],
+    ) -> SyncResult:
+        """Sync data from files (CSV, Parquet, etc.)."""
+        import glob
+        from pathlib import Path
+
+        file_path = config.get("path", "")
+        file_format = config.get("format", "csv")
+
+        if not file_path:
+            raise ValueError("File path required")
+
+        # Expand glob patterns
+        files = glob.glob(file_path)
+        if not files:
+            raise ValueError(f"No files found matching: {file_path}")
+
+        total_rows = 0
+        tables_synced = 0
+        row_counts = {}
+        table_names = []
+
+        self.db.conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{source_name}"')
+
+        for file_path in files:
+            file_name = Path(file_path).stem
+            table_name = file_name.replace(" ", "_").lower()
+
+            self._log(f"  Syncing {file_name}...")
+
+            try:
+                if file_format == "csv":
+                    df = self.db.conn.execute(f"SELECT * FROM read_csv('{file_path}')").fetchdf()
+                elif file_format == "parquet":
+                    df = self.db.conn.execute(f"SELECT * FROM read_parquet('{file_path}')").fetchdf()
+                else:
+                    self._log(f"    Unsupported format: {file_format}")
+                    continue
+
+                # Create table
+                self.db.conn.execute(f'DROP TABLE IF EXISTS "{source_name}"."{table_name}"')
+                self.db.conn.execute(f'CREATE TABLE "{source_name}"."{table_name}" AS SELECT * FROM df')
+
+                row_count = len(df)
+                total_rows += row_count
+                tables_synced += 1
+                row_counts[table_name] = row_count
+                table_names.append(table_name)
+
+                self._log(f"    Synced {row_count:,} rows")
+
+            except Exception as e:
+                self._log(f"    Error syncing {file_name}: {e}")
+                continue
+
+        return SyncResult(
+            connector_name=source_name,
+            connector_type="file",
+            tables_synced=tables_synced,
+            rows_synced=total_rows,
+            status="success",
+            row_counts=row_counts,
+            table_names=table_names,
+        )
+
+    def _sync_graphql(
+        self,
+        source_name: str,
+        credentials: dict[str, str],
+        config: dict[str, Any],
+    ) -> SyncResult:
+        """Sync data from a GraphQL API."""
+        import httpx
+        from dataforge.connectors.registry import get_connector_config
+
+        # Load connector config from YAML
+        connector_config = get_connector_config(source_name)
+        if not connector_config:
+            raise ValueError(f"No connector config found for {source_name}")
+
+        endpoint = connector_config.get("endpoint", "")
+        auth_config = connector_config.get("auth", {})
+        resources = connector_config.get("resources", [])
+
+        # Build auth headers
+        headers = self._build_auth_headers(auth_config, credentials)
+        headers["Content-Type"] = "application/json"
+
+        total_rows = 0
+        tables_synced = 0
+        row_counts = {}
+        table_names = []
+
+        with httpx.Client(timeout=30.0) as client:
+            for resource in resources:
+                resource_name = resource["name"]
+                query = resource.get("query", "")
+                data_path = resource.get("data_path", "data")
+
+                self._log(f"  Syncing {resource_name}...")
+
+                try:
+                    # Execute GraphQL query
+                    response = client.post(
+                        endpoint,
+                        json={"query": query},
+                        headers=headers,
+                    )
+                    response.raise_for_status()
+
+                    result = response.json()
+                    
+                    # Extract data from response
+                    data = result
+                    for key in data_path.split("."):
+                        if isinstance(data, dict) and key in data:
+                            data = data[key]
+                        else:
+                            data = []
+                            break
+
+                    if not isinstance(data, list):
+                        self._log(f"    Warning: Unexpected response format for {resource_name}")
+                        continue
+
+                    if not data:
+                        self._log(f"    No data returned for {resource_name}")
+                        continue
+
+                    # Create schema and table
+                    self.db.conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{source_name}"')
+                    
+                    # Convert to DuckDB table
+                    df = self._list_to_duckdb(data, resource_name, "id")
+                    self.db.conn.execute(f'DROP TABLE IF EXISTS "{source_name}"."{resource_name}"')
+                    self.db.conn.execute(f'CREATE TABLE "{source_name}"."{resource_name}" AS SELECT * FROM df')
+                    
+                    row_count = len(data)
+                    total_rows += row_count
+                    tables_synced += 1
+                    row_counts[resource_name] = row_count
+                    table_names.append(resource_name)
+                    
+                    self._log(f"    Synced {row_count:,} rows")
+
+                except Exception as e:
+                    self._log(f"    Error syncing {resource_name}: {e}")
+                    continue
+
+        return SyncResult(
+            connector_name=source_name,
+            connector_type="graphql",
+            tables_synced=tables_synced,
+            rows_synced=total_rows,
+            status="success",
+            row_counts=row_counts,
+            table_names=table_names,
+        )
+
+    def _build_auth_headers(self, auth_config: dict[str, Any], credentials: dict[str, str]) -> dict[str, str]:
+        """Build authentication headers."""
+        auth_type = auth_config.get("type", "")
+        
+        if auth_type == "bearer":
+            token = credentials.get(auth_config.get("token_field", "api_key"), "")
+            return {"Authorization": f"Bearer {token}"}
+        elif auth_type == "api_key":
+            header = auth_config.get("header", "Authorization")
+            prefix = auth_config.get("prefix", "Bearer")
+            key = credentials.get(auth_config.get("key_field", "api_key"), "")
+            return {header: f"{prefix} {key}"}
+        elif auth_type == "basic":
+            import base64
+            username = credentials.get("username", "")
+            password = credentials.get("password", "")
+            encoded = base64.b64encode(f"{username}:{password}".encode()).decode()
+            return {"Authorization": f"Basic {encoded}"}
+        else:
+            return {}
+
+    def _list_to_duckdb(self, data: list[dict], table_name: str, primary_key: str) -> duckdb.DuckDBPyRelation:
+        """Convert a list of dicts to a DuckDB relation."""
+        if not data:
+            return self.db.conn.execute(f"SELECT NULL as {primary_key} WHERE 1=0")
+        
+        # Get all unique keys from all records
+        all_keys = set()
+        for record in data:
+            all_keys.update(record.keys())
+        
+        # Create a list of tuples for DuckDB
+        rows = []
+        for record in data:
+            row = []
+            for key in sorted(all_keys):
+                value = record.get(key)
+                # Handle nested objects by converting to JSON
+                if isinstance(value, (dict, list)):
+                    value = json.dumps(value)
+                row.append(value)
+            rows.append(tuple(row))
+        
+        # Create column definitions
+        columns = []
+        for key in sorted(all_keys):
+            # Simple type inference
+            sample_value = data[0].get(key)
+            if isinstance(sample_value, bool):
+                col_type = "BOOLEAN"
+            elif isinstance(sample_value, int):
+                col_type = "INTEGER"
+            elif isinstance(sample_value, float):
+                col_type = "DOUBLE"
+            elif isinstance(sample_value, (dict, list)):
+                col_type = "JSON"
+            else:
+                col_type = "VARCHAR"
+            columns.append(f"{key} {col_type}")
+        
+        # Create table
+        create_sql = f"CREATE TABLE {table_name} ({', '.join(columns)})"
+        self.db.conn.execute(create_sql)
+        
+        # Insert data
+        placeholders = ", ".join(["?"] * len(all_keys))
+        insert_sql = f"INSERT INTO {table_name} VALUES ({placeholders})"
+        self.db.conn.executemany(insert_sql, rows)
+        
+        return self.db.conn.execute(f"SELECT * FROM {table_name}")

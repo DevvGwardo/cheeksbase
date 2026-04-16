@@ -1,0 +1,33 @@
+# Stripe API Connector
+name: stripe
+type: rest_api
+description: Stripe payments (customers, subscriptions, charges, invoices)
+base_url: https://api.stripe.com/v1
+auth:
+  type: bearer
+  token_field: stripe_secret_key
+resources:
+  - name: customers
+    endpoint: /customers
+    primary_key: id
+    description: Stripe customers
+  - name: charges
+    endpoint: /charges
+    primary_key: id
+    description: Payment charges
+  - name: subscriptions
+    endpoint: /subscriptions
+    primary_key: id
+    description: Customer subscriptions
+  - name: invoices
+    endpoint: /invoices
+    primary_key: id
+    description: Customer invoices
+  - name: products
+    endpoint: /products
+    primary_key: id
+    description: Products and plans
+  - name: prices
+    endpoint: /prices
+    primary_key: id
+    description: Product prices
