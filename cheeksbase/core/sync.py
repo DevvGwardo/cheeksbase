@@ -393,17 +393,19 @@ class SyncEngine:
 
         self.db.conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{source_name}"')
 
-        for file_path in files:
-            file_name = Path(file_path).stem
+        for fp in files:
+            file_name = Path(fp).stem
             table_name = file_name.replace(" ", "_").lower()
 
             self._log(f"  Syncing {file_name}...")
 
             try:
                 if file_format == "csv":
-                    df = self.db.conn.execute(f"SELECT * FROM read_csv('{file_path}')").fetchdf()
+                    df = self.db.conn.execute(f"SELECT * FROM read_csv('{fp}')").fetchdf()
                 elif file_format == "parquet":
-                    df = self.db.conn.execute(f"SELECT * FROM read_parquet('{file_path}')").fetchdf()
+                    df = self.db.conn.execute(f"SELECT * FROM read_parquet('{fp}')").fetchdf()
+                elif file_format == "json":
+                    df = self.db.conn.execute(f"SELECT * FROM read_json('{fp}')").fetchdf()
                 else:
                     self._log(f"    Unsupported format: {file_format}")
                     continue
@@ -502,7 +504,8 @@ class SyncEngine:
                     self.db.conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{source_name}"')
                     
                     # Convert to DuckDB table
-                    df = self._list_to_duckdb(data, resource_name, "id")
+                    primary_key = resource.get("primary_key", "id")
+                    df = self._list_to_duckdb(data, resource_name, primary_key)
                     self.db.conn.execute(f'DROP TABLE IF EXISTS "{source_name}"."{resource_name}"')
                     self.db.conn.execute(f'CREATE TABLE "{source_name}"."{resource_name}" AS SELECT * FROM df')
                     

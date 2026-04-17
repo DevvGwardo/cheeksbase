@@ -159,11 +159,8 @@ def temp_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     db.close()
 
 
-# NOTE: Several `CheeksbaseDB` reader helpers (get_column_annotations,
-# get_relationships, get_table_description, get_metadata) currently pass
-# params to `self.query()`, which doesn't accept any — so they raise
-# TypeError. These tests query via `db.conn.execute` directly to stay
-# independent of that bug.
+# These tests query via `db.conn.execute` directly for precision
+# and to avoid depending on the higher-level query() wrapper.
 
 
 def _fetch_table_description(db: CheeksbaseDB, schema: str, table: str) -> str | None:

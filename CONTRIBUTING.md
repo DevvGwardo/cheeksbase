@@ -63,8 +63,8 @@ cheeksbase/
 │   │   └── configs/         # Built-in connector YAMLs
 │   ├── mcp/
 │   │   └── server.py        # MCP server for agents
-│   ├── mutations/           # Write-back engine (WIP)
-│   └── agents/              # Semantic agents (WIP)
+│   ├── mutations/           # Write-back mutation engine
+│   └── agents/              # Semantic annotation agents
 ├── tests/
 │   ├── test_core.py
 │   ├── test_connectors.py
