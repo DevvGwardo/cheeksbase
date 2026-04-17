@@ -96,7 +96,7 @@ class TestAdd:
             config = yaml.safe_load(f)
 
         assert "stripe" in config["connectors"]
-        assert config["connectors"]["stripe"]["type"] == "stripe"
+        assert config["connectors"]["stripe"]["source"] == "stripe"
         assert config["connectors"]["stripe"]["credentials"]["api_key"] == "sk_live_abc"
 
     def test_add_connector_copies_yaml_config(self, initialized_env: Path):

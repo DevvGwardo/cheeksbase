@@ -171,35 +171,51 @@ class QueryEngine:
                         pass  # Best-effort refresh
 
     def list_connectors(self) -> dict[str, Any]:
-        """List all connected data connectors with their tables and stats."""
-        schemas = self.db.get_schemas()
+        """List all connected data connectors with their tables and stats.
+
+        Returns every connector declared in config.yaml (whether synced or
+        not), plus any DB schemas that contain data but aren't in config
+        (e.g. created directly). For each, includes table counts, row
+        counts, and freshness info when available.
+        """
+        from cheeksbase.core.config import get_connectors
+
+        configured = get_connectors()
+        all_schemas = [s for s in self.db.get_schemas() if s != META_SCHEMA]
+
+        # Ordered: configured connectors first, then orphan DB schemas
+        names: list[str] = list(configured.keys())
+        names.extend(s for s in all_schemas if s not in configured)
+
         connectors: list[dict[str, Any]] = []
+        for name in names:
+            entry = configured.get(name)
 
-        for schema in schemas:
-            if schema == META_SCHEMA:
-                continue
-
-            tables = self.db.get_tables(schema)
-            user_tables = [t for t in tables if not t.startswith("_dlt_")]
-            if not user_tables:
-                continue
-
+            table_info: list[dict[str, Any]] = []
             total_rows = 0
-            table_info = []
-            for table in user_tables:
-                count = self.db.get_row_count(schema, table)
-                total_rows += count
-                table_info.append({"name": table, "rows": count})
+            if name in all_schemas:
+                tables = self.db.get_tables(name)
+                user_tables = [t for t in tables if not t.startswith("_dlt_")]
+                for table in user_tables:
+                    count = self.db.get_row_count(name, table)
+                    total_rows += count
+                    table_info.append({"name": table, "rows": count})
 
-            freshness = self.get_freshness(schema)
+            freshness = self.get_freshness(name)
 
             connector_entry: dict[str, Any] = {
-                "name": schema,
+                "name": name,
                 "tables": table_info,
-                "table_count": len(user_tables),
+                "table_count": len(table_info),
                 "total_rows": total_rows,
                 "last_sync": freshness["last_sync"],
+                "synced": len(table_info) > 0,
             }
+            if entry:
+                connector_entry["source"] = entry.get("source")
+                connector_entry["configured"] = True
+            else:
+                connector_entry["configured"] = False
 
             if freshness["threshold"] is not None:
                 connector_entry["age"] = freshness["age_human"]

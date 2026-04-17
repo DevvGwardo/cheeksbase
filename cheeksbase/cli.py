@@ -98,8 +98,15 @@ def add(
     if connection_string:
         credentials["connection_string"] = connection_string
 
+    # Build overrides dict (merged onto the template at sync time)
+    overrides: dict[str, Any] = {}
+    if path:
+        overrides["path"] = path
+    if file_format:
+        overrides["format"] = file_format
+
     # Add connector
-    add_connector(name, source_type, credentials, sync_interval)
+    add_connector(name, source_type, credentials, overrides or None, sync_interval)
 
     click.echo(f"Added connector: {name} ({source_type})")
 
@@ -146,6 +153,7 @@ def sync(name: str | None, sync_all: bool, force: bool):
       cheeksbase sync --all           # sync all connectors
       cheeksbase sync stripe --force  # force sync even if fresh
     """
+    from cheeksbase.connectors.registry import resolve_source_config
     from cheeksbase.core.db import CheeksbaseDB
     from cheeksbase.core.sync import SyncEngine
 
@@ -170,10 +178,16 @@ def sync(name: str | None, sync_all: bool, force: bool):
         sync_engine = SyncEngine(db)
 
         for connector_name in sync_list:
-            connector_config = connectors[connector_name]
+            connector_entry = connectors[connector_name]
             click.echo(f"Syncing {connector_name}...")
 
-            result = sync_engine.sync(connector_name, connector_config)
+            try:
+                resolved = resolve_source_config(connector_entry)
+            except ValueError as e:
+                click.echo(f"  ✗ Error: {e}", err=True)
+                continue
+
+            result = sync_engine.sync(connector_name, resolved)
 
             if result.status == "success":
                 click.echo(f"  ✓ Synced {result.tables_synced} tables, {result.rows_synced:,} rows")
