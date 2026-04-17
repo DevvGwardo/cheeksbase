@@ -114,10 +114,47 @@ CREATE TABLE IF NOT EXISTS {META_SCHEMA}.metadata (
     value        VARCHAR,
     PRIMARY KEY (schema_name, table_name, column_name, key)
 );
+
+-- Query cache: persistent cross-call query result cache
+CREATE TABLE IF NOT EXISTS {META_SCHEMA}.query_cache (
+    cache_key VARCHAR PRIMARY KEY,
+    sql_text VARCHAR NOT NULL,
+    max_rows INTEGER NOT NULL,
+    result_json VARCHAR NOT NULL,
+    created_at TIMESTAMP DEFAULT current_timestamp,
+    expires_at TIMESTAMP NOT NULL
+);
+
+-- Query history: tracks what agents query for institutional knowledge
+CREATE SEQUENCE IF NOT EXISTS {META_SCHEMA}.query_history_seq START 1;
+
+CREATE TABLE IF NOT EXISTS {META_SCHEMA}.query_history (
+    id INTEGER PRIMARY KEY DEFAULT nextval('{META_SCHEMA}.query_history_seq'),
+    sql_text VARCHAR NOT NULL,
+    tables_used VARCHAR,
+    rows_returned INTEGER,
+    duration_ms INTEGER,
+    timestamp TIMESTAMP DEFAULT current_timestamp,
+    error_message VARCHAR
+);
+
+-- Query templates: reusable query patterns discovered from successful queries
+CREATE SEQUENCE IF NOT EXISTS {META_SCHEMA}.query_templates_seq START 1;
+
+CREATE TABLE IF NOT EXISTS {META_SCHEMA}.query_templates (
+    id INTEGER PRIMARY KEY DEFAULT nextval('{META_SCHEMA}.query_templates_seq'),
+    schema_name VARCHAR NOT NULL,
+    table_name VARCHAR NOT NULL,
+    query_sql VARCHAR NOT NULL,
+    description VARCHAR,
+    times_used INTEGER DEFAULT 0,
+    success_rate FLOAT DEFAULT 1.0,
+    created_at TIMESTAMP DEFAULT current_timestamp
+);
 """
 
 
-_META_TABLES = ["sync_log", "tables", "columns", "live_rows", "mutations", "relationships", "metadata"]
+_META_TABLES = ["sync_log", "tables", "columns", "live_rows", "mutations", "relationships", "metadata", "query_cache", "query_history", "query_templates"]
 
 
 class CheeksbaseDB:
@@ -142,6 +179,19 @@ class CheeksbaseDB:
             stmt = statement.strip()
             if stmt:
                 self.conn.execute(stmt)
+
+        # Migration: add statistical columns if they don't exist
+        for col_sql in [
+            "ALTER TABLE _cheeksbase.columns ADD COLUMN IF NOT EXISTS null_rate FLOAT",
+            "ALTER TABLE _cheeksbase.columns ADD COLUMN IF NOT EXISTS distinct_count BIGINT",
+            "ALTER TABLE _cheeksbase.columns ADD COLUMN IF NOT EXISTS sample_values VARCHAR",
+            "ALTER TABLE _cheeksbase.columns ADD COLUMN IF NOT EXISTS min_value VARCHAR",
+            "ALTER TABLE _cheeksbase.columns ADD COLUMN IF NOT EXISTS max_value VARCHAR",
+        ]:
+            try:
+                self.conn.execute(col_sql)
+            except Exception:
+                pass  # Already exists
 
     def execute(self, sql: str, params: list | None = None) -> duckdb.DuckDBPyRelation:
         """Execute a SQL query."""
@@ -362,6 +412,88 @@ class CheeksbaseDB:
         self.conn.execute(
             f"DELETE FROM {META_SCHEMA}.live_rows WHERE connector_name = ?",
             [connector_name],
+        )
+
+    def get_query_cache(self, cache_key: str) -> dict | None:
+        """Get a cached query result by key."""
+        rows = self.query(
+            "SELECT result_json, expires_at FROM _cheeksbase.query_cache "
+            "WHERE cache_key = ? AND expires_at > current_timestamp",
+            [cache_key],
+        )
+        if rows:
+            import json
+            return json.loads(rows[0]["result_json"])
+        return None
+
+    def set_query_cache(self, cache_key: str, sql: str, max_rows: int, result: dict, ttl_seconds: int = 300) -> None:
+        """Cache a query result with TTL."""
+        import json
+        self.conn.execute(
+            "INSERT INTO _cheeksbase.query_cache "
+            "(cache_key, sql_text, max_rows, result_json, created_at, expires_at) "
+            "VALUES (?, ?, ?, ?, current_timestamp, current_timestamp + INTERVAL '" + str(ttl_seconds) + " seconds') "
+            "ON CONFLICT (cache_key) DO UPDATE SET "
+            "result_json = excluded.result_json, expires_at = excluded.expires_at",
+            [cache_key, sql, max_rows, json.dumps(result, default=str)],
+        )
+
+    def record_query_history(
+        self, sql: str, tables_used: str | None, rows_returned: int,
+        duration_ms: int, error: str | None = None,
+    ) -> None:
+        """Record a query in history for pattern analysis."""
+        self.conn.execute(
+            "INSERT INTO _cheeksbase.query_history "
+            "(sql_text, tables_used, rows_returned, duration_ms, error_message) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [sql, tables_used, rows_returned, duration_ms, error],
+        )
+
+    def add_query_template(
+        self, schema: str, table: str, sql: str,
+        description: str | None = None,
+    ) -> None:
+        """Add a query template for a table."""
+        self.conn.execute(
+            "INSERT INTO _cheeksbase.query_templates "
+            "(schema_name, table_name, query_sql, description) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT DO NOTHING",
+            [schema, table, sql, description],
+        )
+
+    def get_query_templates(self, schema: str, table: str, limit: int = 5) -> list[dict]:
+        """Get top query templates for a table."""
+        return self.query(
+            "SELECT query_sql, description, times_used, success_rate "
+            "FROM _cheeksbase.query_templates "
+            "WHERE schema_name = ? AND table_name = ? "
+            "ORDER BY times_used DESC LIMIT ?",
+            [schema, table, limit],
+        )
+
+    def store_column_stats(
+        self, connector_name: str, schema_name: str, table_name: str,
+        column_name: str, null_rate: float | None, distinct_count: int | None,
+        sample_values: str | None = None, min_value: str | None = None,
+        max_value: str | None = None,
+    ) -> None:
+        """Store statistical profile for a column."""
+        self.conn.execute(
+            "INSERT INTO _cheeksbase.columns "
+            "(connector_name, schema_name, table_name, column_name, "
+            " null_rate, distinct_count, sample_values, min_value, max_value) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT (connector_name, schema_name, table_name, column_name) "
+            "DO UPDATE SET "
+            "null_rate = excluded.null_rate, "
+            "distinct_count = excluded.distinct_count, "
+            "sample_values = excluded.sample_values, "
+            "min_value = excluded.min_value, "
+            "max_value = excluded.max_value",
+            [connector_name, schema_name, table_name, column_name,
+             null_rate, distinct_count, sample_values, min_value, max_value],
         )
 
     def close(self) -> None:
