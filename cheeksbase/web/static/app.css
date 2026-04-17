@@ -1,0 +1,245 @@
+/* cheeksbase — terminal-aesthetic stylesheet */
+
+:root {
+  --bg: #0a0a0a;
+  --bg-raised: #111111;
+  --fg: #e8e8e8;
+  --fg-muted: #9a9a9a;
+  --fg-dim: #6a6a6a;
+  --border: #2a2a2a;
+  --border-strong: #3a3a3a;
+  --accent: #22c55e;
+  --accent-dim: #166534;
+  --warn: #f59e0b;
+  --danger: #ef4444;
+  --inverse-bg: #f5f5f5;
+  --inverse-fg: #0a0a0a;
+
+  --mono: "JetBrains Mono", "Fira Code", "SF Mono", "Menlo", "Consolas", monospace;
+  --fs-sm: 12px;
+  --fs-base: 14px;
+  --fs-lg: 16px;
+  --fs-xl: 22px;
+  --lh: 1.55;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: var(--fs-base);
+  line-height: var(--lh);
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  background-image: radial-gradient(circle, var(--border) 1px, transparent 1px);
+  background-size: 24px 24px;
+  background-position: 0 0;
+  min-height: 100vh;
+}
+
+a {
+  color: var(--fg);
+  text-decoration: none;
+  border-bottom: 1px solid var(--border);
+}
+a:hover { color: var(--fg); border-bottom-color: var(--fg-muted); }
+
+code, pre, kbd {
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+}
+
+main.container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem 4rem;
+}
+
+/* ── header ─────────────────────────────────────────── */
+header.site {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding-bottom: 1rem;
+  margin-bottom: 2rem;
+  border-bottom: 1px solid var(--border);
+}
+header.site .brand {
+  font-size: var(--fs-lg);
+  border-bottom: none;
+  color: var(--fg);
+  letter-spacing: -0.01em;
+}
+header.site .brand .dot { color: var(--accent); margin-right: 0.4rem; }
+header.site .meta {
+  font-size: var(--fs-sm);
+  color: var(--fg-muted);
+}
+header.site .meta .sep { color: var(--fg-dim); margin: 0 0.5rem; }
+
+/* ── breadcrumb ────────────────────────────────────── */
+nav.breadcrumb {
+  font-size: var(--fs-sm);
+  color: var(--fg-muted);
+  margin-bottom: 1.5rem;
+}
+nav.breadcrumb a {
+  color: var(--fg-muted);
+  border-bottom: none;
+}
+nav.breadcrumb a:hover { color: var(--fg); }
+nav.breadcrumb .sep { color: var(--fg-dim); margin: 0 0.5rem; }
+nav.breadcrumb strong {
+  color: var(--fg);
+  font-weight: normal;
+}
+
+/* ── typography ────────────────────────────────────── */
+h1, h2, h3 {
+  font-family: var(--mono);
+  font-weight: normal;
+  letter-spacing: -0.01em;
+  margin: 0 0 1rem;
+}
+h1 { font-size: var(--fs-xl); }
+h2 { font-size: var(--fs-lg); }
+h3 { font-size: var(--fs-base); }
+
+p { margin: 0 0 1rem; }
+.muted { color: var(--fg-muted); }
+.dim { color: var(--fg-dim); }
+
+/* ── pane (bordered boxes) ─────────────────────────── */
+.pane {
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1.5rem;
+}
+.pane.empty {
+  text-align: center;
+  padding: 3rem 1.5rem;
+  color: var(--fg-muted);
+}
+.pane .hint {
+  margin-top: 1rem;
+  color: var(--fg-dim);
+  font-size: var(--fs-sm);
+}
+
+/* ── tables ────────────────────────────────────────── */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+}
+th, td {
+  text-align: left;
+  padding: 0.6rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+th {
+  color: var(--fg-muted);
+  font-weight: normal;
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+  border-bottom: 1px solid var(--border-strong);
+}
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:hover td { background: rgba(255,255,255,0.02); }
+table.rows td, table.rows th {
+  white-space: nowrap;
+  max-width: 36ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+th small.muted { color: var(--fg-dim); font-size: 11px; }
+
+/* ── pill / status chips ───────────────────────────── */
+.pill {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border: 1px solid var(--border-strong);
+  color: var(--fg-muted);
+  background: transparent;
+}
+.pill.fresh { color: var(--accent); border-color: var(--accent-dim); }
+.pill.stale { color: var(--warn); border-color: var(--warn); }
+.pill.unsynced { color: var(--fg-dim); border-color: var(--border); }
+
+/* ── buttons / CTA links ───────────────────────────── */
+a.btn, button.btn {
+  display: inline-block;
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  border-radius: 0;
+}
+a.btn { border-bottom: 1px solid var(--border-strong); }
+a.btn:hover, button.btn:hover:not(:disabled) {
+  border-color: var(--fg-muted);
+  color: var(--fg);
+}
+a.btn.primary, button.btn.primary {
+  background: var(--inverse-bg);
+  color: var(--inverse-fg);
+  border-color: var(--inverse-bg);
+}
+a.btn.primary:hover { background: #ffffff; border-color: #ffffff; }
+button.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+a.btn::after { content: ""; }
+a.btn.arrow::after { content: "  \2192"; color: var(--fg-muted); }
+
+/* ── pagination ────────────────────────────────────── */
+.pagination {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  font-size: var(--fs-sm);
+}
+.pagination .status { color: var(--fg-muted); margin-left: auto; }
+
+/* ── CLI hint blocks ───────────────────────────────── */
+.cli {
+  display: inline-block;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  font-size: var(--fs-sm);
+  color: var(--fg);
+  margin-top: 0.75rem;
+}
+.cli::before {
+  content: "$ ";
+  color: var(--accent);
+  margin-right: 0.25rem;
+}
+
+/* ── inline code ───────────────────────────────────── */
+code.inline {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 1px 6px;
+  font-size: var(--fs-sm);
+  color: var(--fg);
+}

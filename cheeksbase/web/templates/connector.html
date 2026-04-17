@@ -1,43 +1,50 @@
 {% extends "base.html" %}
-{% block title %}{{ connector.name }} — Cheeksbase{% endblock %}
+{% block title %}{{ connector.name }} &mdash; cheeksbase{% endblock %}
 {% block breadcrumb %}
-  <nav class="breadcrumb"><a href="/">Data sources</a> / <strong>{{ connector.name }}</strong></nav>
+  <nav class="breadcrumb">
+    <a href="/">data sources</a><span class="sep">/</span><strong>{{ connector.name }}</strong>
+  </nav>
 {% endblock %}
 {% block content %}
   <h2>{{ connector.name }}</h2>
   <p class="muted">
-    Source: <code>{{ connector.source or "unknown" }}</code> &middot;
-    {{ connector.table_count }} table{{ "" if connector.table_count == 1 else "s" }} &middot;
-    {{ "{:,}".format(connector.total_rows) }} row{{ "" if connector.total_rows == 1 else "s" }} &middot;
+    source <code class="inline">{{ connector.source or "unknown" }}</code>
+    <span class="dim">&middot;</span>
+    {{ connector.table_count }} table{{ "" if connector.table_count == 1 else "s" }}
+    <span class="dim">&middot;</span>
+    {{ "{:,}".format(connector.total_rows) }} row{{ "" if connector.total_rows == 1 else "s" }}
+    <span class="dim">&middot;</span>
     {% if connector.last_sync %}last synced {{ connector.last_sync }}{% else %}never synced{% endif %}
   </p>
 
   {% if not connector.tables %}
-    <div class="empty-state">
-      <p>No tables yet.</p>
+    <div class="pane empty">
+      <p><strong class="muted">No tables yet.</strong></p>
       {% if not connector.synced %}
-        <p>Sync this source first to bring in data:</p>
-        <p><code>cheeksbase sync {{ connector.name }}</code></p>
+        <p class="dim">sync this source first to bring in data:</p>
+        <p><span class="cli">cheeksbase sync {{ connector.name }}</span></p>
       {% endif %}
     </div>
   {% else %}
-    <table>
-      <thead>
-        <tr>
-          <th>Table</th>
-          <th>Rows</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for t in connector.tables %}
+    <div class="pane">
+      <table>
+        <thead>
           <tr>
-            <td><strong><a href="/connectors/{{ connector.name }}/tables/{{ t.name }}">{{ t.name }}</a></strong></td>
-            <td>{{ "{:,}".format(t.rows) }}</td>
-            <td><a href="/connectors/{{ connector.name }}/tables/{{ t.name }}" role="button" class="secondary">View rows &rarr;</a></td>
+            <th>table</th>
+            <th>rows</th>
+            <th></th>
           </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {% for t in connector.tables %}
+            <tr>
+              <td><a href="/connectors/{{ connector.name }}/tables/{{ t.name }}">{{ t.name }}</a></td>
+              <td>{{ "{:,}".format(t.rows) }}</td>
+              <td><a href="/connectors/{{ connector.name }}/tables/{{ t.name }}" class="btn arrow">view rows</a></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   {% endif %}
 {% endblock %}

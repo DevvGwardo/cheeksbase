@@ -1,47 +1,49 @@
 {% extends "base.html" %}
-{% block title %}Data sources — Cheeksbase{% endblock %}
+{% block title %}data sources &mdash; cheeksbase{% endblock %}
 {% block content %}
-  <h2>Your data sources</h2>
-  <p class="muted">Click a source to browse its tables.</p>
+  <h2>Data sources</h2>
+  <p class="muted">click a source to browse its tables.</p>
 
   {% if not connectors %}
-    <div class="empty-state">
-      <p>No data sources yet.</p>
-      <p>Add one from the terminal:</p>
-      <p><code>cheeksbase add csv --name my_data --path "./data/*.csv" --format csv</code></p>
+    <div class="pane empty">
+      <p><strong class="muted">No data sources yet.</strong></p>
+      <p class="dim">add one from the terminal:</p>
+      <p><span class="cli">cheeksbase add csv --name my_data --path "./data/*.csv" --format csv</span></p>
     </div>
   {% else %}
-    <table>
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Source</th>
-          <th>Tables</th>
-          <th>Rows</th>
-          <th>Last sync</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for c in connectors %}
+    <div class="pane">
+      <table>
+        <thead>
           <tr>
-            <td><strong><a href="/connectors/{{ c.name }}">{{ c.name }}</a></strong></td>
-            <td class="muted">{{ c.source or "—" }}</td>
-            <td>{{ c.table_count }}</td>
-            <td>{{ "{:,}".format(c.total_rows) }}</td>
-            <td>
-              {% if not c.synced %}
-                <span class="pill unsynced">never synced</span>
-              {% elif c.is_stale %}
-                <span class="pill stale">stale ({{ c.age }})</span>
-              {% else %}
-                <span class="pill fresh">{{ c.age or "ok" }}</span>
-              {% endif %}
-            </td>
-            <td><a href="/connectors/{{ c.name }}" role="button" class="secondary">Browse &rarr;</a></td>
+            <th>name</th>
+            <th>source</th>
+            <th>tables</th>
+            <th>rows</th>
+            <th>status</th>
+            <th></th>
           </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {% for c in connectors %}
+            <tr>
+              <td><a href="/connectors/{{ c.name }}">{{ c.name }}</a></td>
+              <td class="muted">{{ c.source or "&mdash;" }}</td>
+              <td>{{ c.table_count }}</td>
+              <td>{{ "{:,}".format(c.total_rows) }}</td>
+              <td>
+                {% if not c.synced %}
+                  <span class="pill unsynced">never synced</span>
+                {% elif c.is_stale %}
+                  <span class="pill stale">stale &middot; {{ c.age }}</span>
+                {% else %}
+                  <span class="pill fresh">{{ c.age or "live" }}</span>
+                {% endif %}
+              </td>
+              <td><a href="/connectors/{{ c.name }}" class="btn arrow">browse</a></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   {% endif %}
 {% endblock %}

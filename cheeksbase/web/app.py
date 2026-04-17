@@ -7,18 +7,21 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from cheeksbase.core.db import CheeksbaseDB
 from cheeksbase.core.query import QueryEngine
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
+STATIC_DIR = Path(__file__).parent / "static"
 DEFAULT_PAGE_SIZE = 50
 
 
 def create_app() -> FastAPI:
     """Build the FastAPI app."""
     app = FastAPI(title="Cheeksbase", docs_url=None, redoc_url=None)
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
     @app.get("/", response_class=HTMLResponse)
