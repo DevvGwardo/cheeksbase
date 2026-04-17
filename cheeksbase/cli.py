@@ -361,6 +361,30 @@ def serve(port: int, host: str):
     run_server(host=host, port=port)
 
 
+@cli.command("serve-web")
+@click.option("--port", default=8765, help="Port to run web UI on")
+@click.option("--host", default="127.0.0.1", help="Host to bind to")
+def serve_web(port: int, host: str):
+    """Start the web UI for browsing your data."""
+    try:
+        import uvicorn
+
+        from cheeksbase.web import create_app
+    except ImportError as e:
+        click.echo(
+            "Web UI dependencies not installed. Install with:\n"
+            "  pip install 'cheeksbase[web]'",
+            err=True,
+        )
+        click.echo(f"\n({e})", err=True)
+        sys.exit(1)
+
+    app = create_app()
+    click.echo(f"Cheeksbase web UI on http://{host}:{port}")
+    click.echo("Press Ctrl+C to stop.")
+    uvicorn.run(app, host=host, port=port, log_level="warning")
+
+
 @cli.command()
 @click.option("--available", is_flag=True, help="Show available connector types")
 def sources(available: bool):
@@ -383,8 +407,8 @@ def sources(available: bool):
 
         click.echo("Configured connectors:")
         for name, config in connectors.items():
-            connector_type = config.get("type", "unknown")
-            click.echo(f"  {name:20} ({connector_type})")
+            source = config.get("source", "unknown")
+            click.echo(f"  {name:20} ({source})")
 
 
 def _print_pretty(result: dict) -> None:

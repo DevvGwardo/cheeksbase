@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Data sources — Cheeksbase{% endblock %}
+{% block content %}
+  <h2>Your data sources</h2>
+  <p class="muted">Click a source to browse its tables.</p>
+
+  {% if not connectors %}
+    <div class="empty-state">
+      <p>No data sources yet.</p>
+      <p>Add one from the terminal:</p>
+      <p><code>cheeksbase add csv --name my_data --path "./data/*.csv" --format csv</code></p>
+    </div>
+  {% else %}
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Source</th>
+          <th>Tables</th>
+          <th>Rows</th>
+          <th>Last sync</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in connectors %}
+          <tr>
+            <td><strong><a href="/connectors/{{ c.name }}">{{ c.name }}</a></strong></td>
+            <td class="muted">{{ c.source or "—" }}</td>
+            <td>{{ c.table_count }}</td>
+            <td>{{ "{:,}".format(c.total_rows) }}</td>
+            <td>
+              {% if not c.synced %}
+                <span class="pill unsynced">never synced</span>
+              {% elif c.is_stale %}
+                <span class="pill stale">stale ({{ c.age }})</span>
+              {% else %}
+                <span class="pill fresh">{{ c.age or "ok" }}</span>
+              {% endif %}
+            </td>
+            <td><a href="/connectors/{{ c.name }}" role="button" class="secondary">Browse &rarr;</a></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+{% endblock %}
