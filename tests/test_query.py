@@ -384,3 +384,66 @@ class TestSerialize:
         result = engine.execute("SELECT data FROM test_connector.blob_test")
         # Should be a hex string, not crash
         assert isinstance(result["rows"][0]["data"], str)
+
+
+class TestCacheIsolation:
+    """Cache must return independent copies, not shared mutable dicts."""
+
+    def test_cached_result_is_independent(self, engine):
+        # First call — populates cache
+        r1 = engine.execute("SELECT 1 as val")
+        # Mutate the returned result
+        r1["rows"][0]["mutated"] = True
+        # Second call — must NOT see the mutation
+        r2 = engine.execute("SELECT 1 as val")
+        assert "mutated" not in r2["rows"][0]
+
+    def test_cached_flag_not_stuck(self, engine):
+        engine.execute("SELECT 1 as val")  # populate cache
+        r2 = engine.execute("SELECT 1 as val")  # cached hit
+        assert r2.get("_cached") is True
+        r3 = engine.execute("SELECT 1 as val", use_cache=False)  # bypass cache
+        assert r3.get("_cached") is not True
+
+
+class TestSQLRouting:
+    """Mutation routing must not be bypassed by comments or CTEs."""
+
+    def test_empty_string_returns_error(self, engine):
+        result = engine.execute("")
+        assert "error" in result or "columns" in result  # should not crash
+
+    def test_comment_only_returns_error(self, engine):
+        result = engine.execute("-- just a comment\n")
+        assert "error" in result or "columns" in result
+
+    def test_block_comment_only(self, engine):
+        result = engine.execute("/* block comment */")
+        assert "error" in result or "columns" in result
+
+    def test_with_cte_delete_routed_to_mutation(self, engine):
+        # Should route to mutation engine, not raw execute
+        result = engine.execute(
+            "WITH target AS (SELECT id FROM test_connector.users WHERE id = 999) "
+            "DELETE FROM test_connector.users WHERE id IN (SELECT id FROM target)"
+        )
+        assert result.get("status") == "pending"  # mutation engine returns pending
+
+    def test_with_cte_select_still_works(self, engine, db):
+        result = engine.execute(
+            "WITH cte AS (SELECT * FROM test_connector.users) SELECT count(*) as cnt FROM cte"
+        )
+        assert "error" not in result
+        assert result["rows"][0]["cnt"] == 5
+
+    def test_duckdb_copy_blocked(self, engine, tmp_path):
+        target = tmp_path / "out.csv"
+        result = engine.execute(
+            f"COPY (SELECT * FROM test_connector.users) TO '{target}' (FORMAT CSV)"
+        )
+        # Should be routed to mutation engine and rejected
+        assert "error" in result or result.get("status") in ("rejected", "error")
+
+    def test_attach_blocked(self, engine):
+        result = engine.execute("ATTACH ':memory:' AS evil")
+        assert "error" in result or result.get("status") in ("rejected", "error")

@@ -36,12 +36,16 @@ class QueryEngine:
         if use_cache and cache_key in self._query_cache:
             cached = self._query_cache[cache_key]
             if time.time() - cached["timestamp"] < self._cache_ttl:
-                cached["result"]["_cached"] = True
-                return cached["result"]
+                # Return a deep-ish copy to prevent mutation of cached results.
+                result = {**cached["result"], "_cached": True}
+                if "rows" in result:
+                    result["rows"] = [dict(r) for r in result["rows"]]
+                return result
 
         # Route mutations to the mutation engine
-        first_word = sql.strip().split()[0].upper() if sql.strip() else ""
-        if first_word in ("UPDATE", "INSERT", "DELETE", "DROP", "ALTER", "TRUNCATE", "CREATE", "GRANT", "REVOKE"):
+        first_word = self._get_first_sql_keyword(sql)
+        if first_word in ("UPDATE", "INSERT", "DELETE", "DROP", "ALTER", "TRUNCATE",
+                          "CREATE", "GRANT", "REVOKE", "COPY", "ATTACH", "LOAD", "INSTALL"):
             from cheeksbase.mutations.engine import MutationEngine
             mutation_engine = MutationEngine(self.db)
             return mutation_engine.handle_sql(sql)
@@ -90,8 +94,12 @@ class QueryEngine:
 
         # Cache the result
         if use_cache:
+            # Deep copy rows so mutations to the returned result don't corrupt the cache.
+            cached_result = dict(result)
+            if "rows" in cached_result:
+                cached_result["rows"] = [dict(r) for r in cached_result["rows"]]
             self._query_cache[cache_key] = {
-                "result": result,
+                "result": cached_result,
                 "timestamp": time.time(),
             }
 
@@ -360,3 +368,45 @@ class QueryEngine:
     def set_cache_ttl(self, ttl_seconds: int) -> None:
         """Set the cache TTL in seconds."""
         self._cache_ttl = ttl_seconds
+
+    @staticmethod
+    def _get_first_sql_keyword(sql: str) -> str:
+        """Extract the first real SQL keyword, stripping comments and handling WITH."""
+        stripped = sql.strip()
+        if not stripped:
+            return ""
+        # Strip leading single-line comments (-- ...) and block comments (/* ... */)
+        cleaned = re.sub(r'--[^\n]*', '', stripped)
+        cleaned = re.sub(r'/\*.*?\*/', '', cleaned, flags=re.DOTALL)
+        cleaned = cleaned.strip()
+        if not cleaned:
+            return ""
+        # Handle WITH ... AS (...) <actual_op> by extracting the operation after CTEs
+        upper = cleaned.upper()
+        if upper.startswith("WITH "):
+            # Scan through the CTE definitions to find where they end.
+            # CTEs are: name AS (...) [, name AS (...)]*
+            # The operation keyword is the first keyword after all CTE definitions
+            # at depth 0 that isn't a comma.
+            depth = 0
+            i = 0
+            n = len(cleaned)
+            while i < n:
+                ch = cleaned[i]
+                if ch == '(':
+                    depth += 1
+                elif ch == ')':
+                    depth -= 1
+                    if depth == 0:
+                        # End of a CTE definition. Check what follows.
+                        after = cleaned[i + 1:].lstrip()
+                        if after and after[0] == ',':
+                            # More CTEs — skip the comma and continue
+                            i += 1  # will be incremented again by the loop
+                        elif after:
+                            # This is the operation keyword
+                            return after.split()[0].upper()
+                i += 1
+            # Fallback: route to mutation engine for further validation
+            return "WITH"
+        return cleaned.split()[0].upper()

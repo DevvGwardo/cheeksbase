@@ -295,5 +295,46 @@ def test_query_engine_blocks_drop(db_with_customers):
     assert result["status"] == "rejected"
 
 
+def test_update_without_where_rejected(db_with_customers):
+    """UPDATE without WHERE must be rejected — catastrophic data change."""
+    engine = MutationEngine(db_with_customers)
+    result = engine.handle_sql("UPDATE stripe.customers SET email = 'all@example.com'")
+    assert result["status"] == "rejected"
+    assert "WHERE" in result["errors"][0]
+
+
+def test_delete_without_where_rejected(db_with_customers):
+    """DELETE without WHERE must be rejected."""
+    engine = MutationEngine(db_with_customers)
+    result = engine.handle_sql("DELETE FROM stripe.customers")
+    assert result["status"] == "rejected"
+    assert "WHERE" in result["errors"][0]
+
+
+def test_copy_blocked(db_with_customers):
+    """DuckDB COPY command must be rejected."""
+    engine = MutationEngine(db_with_customers)
+    result = engine.handle_sql("COPY (SELECT * FROM stripe.customers) TO '/tmp/out.csv'")
+    assert result["status"] == "rejected"
+
+
+def test_attach_blocked(db_with_customers):
+    """DuckDB ATTACH command must be rejected."""
+    engine = MutationEngine(db_with_customers)
+    result = engine.handle_sql("ATTACH ':memory:' AS evil")
+    assert result["status"] == "rejected"
+
+
+def test_with_cte_delete_parsed_correctly(db_with_customers):
+    """WITH CTE wrapping DELETE must be detected and blocked if no WHERE on the DELETE."""
+    engine = MutationEngine(db_with_customers)
+    result = engine.handle_sql(
+        "WITH target AS (SELECT id FROM stripe.customers) "
+        "DELETE FROM stripe.customers"
+    )
+    # The DELETE has no WHERE — should be rejected
+    assert result["status"] == "rejected"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

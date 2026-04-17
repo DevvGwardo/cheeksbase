@@ -487,6 +487,40 @@ class TestSyncDispatcher:
         assert result.status == "success"
         assert result.connector_type == "file"
 
+    def test_sync_file_with_special_chars_in_filename(self, engine, tmp_path):
+        """Filenames with single quotes or unicode should not cause SQL injection."""
+        csv = tmp_path / "it's data.csv"
+        csv.write_text("a,b\n1,2\n")
+        result = engine.sync("fsrc", {"type": "file", "path": str(csv), "format": "csv"})
+        assert result.status == "success"
+        # The table name should be sanitized (no apostrophe)
+        assert result.tables_synced == 1
+
+    def test_sync_file_with_leading_digit_filename(self, engine, tmp_path):
+        """Filenames starting with digits get a t_ prefix."""
+        csv = tmp_path / "123data.csv"
+        csv.write_text("a,b\n1,2\n")
+        result = engine.sync("fsrc", {"type": "file", "path": str(csv), "format": "csv"})
+        assert result.status == "success"
+        assert result.tables_synced == 1
+
+    def test_invalid_connector_name_rejected(self, engine):
+        """Connector names with SQL injection chars must be rejected."""
+        import pytest
+
+        from cheeksbase.core.sync import _validate_identifier
+
+        with pytest.raises(ValueError, match="Invalid SQL identifier"):
+            _validate_identifier('foo"; DROP TABLE users; --')
+        with pytest.raises(ValueError, match="Invalid SQL identifier"):
+            _validate_identifier("has spaces")
+        with pytest.raises(ValueError, match="Invalid SQL identifier"):
+            _validate_identifier("123starts_with_digit")
+        # Valid identifiers should pass
+        assert _validate_identifier("valid_name") == "valid_name"
+        assert _validate_identifier("_private") == "_private"
+        assert _validate_identifier("camelCase") == "camelCase"
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

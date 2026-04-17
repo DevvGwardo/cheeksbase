@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,16 @@ from cheeksbase.core.config import get_db_path
 
 # Internal schema for cheeksbase metadata
 META_SCHEMA = "_cheeksbase"
+
+
+def _validate_identifier(name: str) -> str:
+    """Validate and return a SQL identifier (schema/table/column).
+
+    Only allows [a-zA-Z_][a-zA-Z0-9_]* to prevent SQL injection.
+    """
+    if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', name):
+        raise ValueError(f"Invalid SQL identifier: {name!r}")
+    return name
 
 
 INIT_SQL = f"""
@@ -186,7 +197,9 @@ class CheeksbaseDB:
 
     def get_row_count(self, schema: str, table: str) -> int:
         """Get row count for a table."""
-        rows = self.query(f'SELECT COUNT(*) as cnt FROM "{schema}"."{table}"')
+        safe_schema = _validate_identifier(schema)
+        safe_table = _validate_identifier(table)
+        rows = self.query(f'SELECT COUNT(*) as cnt FROM "{safe_schema}"."{safe_table}"')
         return rows[0]["cnt"] if rows else 0
 
     def log_sync_start(self, connector_name: str, connector_type: str) -> int:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import time
 from collections.abc import Callable
@@ -13,6 +14,17 @@ from typing import Any
 import duckdb
 
 from cheeksbase.core.db import CheeksbaseDB
+
+
+def _validate_identifier(name: str) -> str:
+    """Validate and return a SQL identifier (schema/table/column).
+
+    Only allows [a-zA-Z_][a-zA-Z0-9_]* to prevent SQL injection.
+    Raises ValueError if the identifier contains unsafe characters.
+    """
+    if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', name):
+        raise ValueError(f"Invalid SQL identifier: {name!r}")
+    return name
 
 
 @dataclass
@@ -240,12 +252,14 @@ class SyncEngine:
                         continue
 
                     # Create schema and table
-                    self.db.conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{source_name}"')
+                    safe_source = _validate_identifier(source_name)
+                    safe_resource = _validate_identifier(resource_name)
+                    self.db.conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{safe_source}"')
 
                     # Convert to DuckDB table
                     df = self._list_to_duckdb(data, resource_name, primary_key)  # noqa: F841
-                    self.db.conn.execute(f'DROP TABLE IF EXISTS "{source_name}"."{resource_name}"')
-                    self.db.conn.execute(f'CREATE TABLE "{source_name}"."{resource_name}" AS SELECT * FROM df')
+                    self.db.conn.execute(f'DROP TABLE IF EXISTS "{safe_source}"."{safe_resource}"')
+                    self.db.conn.execute(f'CREATE TABLE "{safe_source}"."{safe_resource}" AS SELECT * FROM df')
 
                     row_count = len(data)
                     total_rows += row_count
@@ -280,7 +294,8 @@ class SyncEngine:
         if not connection_string:
             raise ValueError("Database connection string required")
 
-        self.db.conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{source_name}"')
+        safe_source = _validate_identifier(source_name)
+        self.db.conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{safe_source}"')
 
         # Attach the remote database as a duckdb attachment
         attach_name = f"_remote_{source_name}"
@@ -297,7 +312,8 @@ class SyncEngine:
         tables_cfg = config.get("tables", [])
 
         try:
-            attach_sql = f"ATTACH '{connection_string}' AS {attach_name}"
+            escaped_conn = connection_string.replace("'", "''")
+            attach_sql = f"ATTACH '{escaped_conn}' AS {attach_name}"
             if read_only:
                 attach_sql += " (READ_ONLY)"
             self.db.conn.execute(attach_sql)
@@ -331,15 +347,16 @@ class SyncEngine:
 
             self._log(f"  Syncing {table_name}...")
             try:
+                safe_table = _validate_identifier(table_name)
                 self.db.conn.execute(
-                    f'DROP TABLE IF EXISTS "{source_name}"."{table_name}"'
+                    f'DROP TABLE IF EXISTS "{safe_source}"."{safe_table}"'
                 )
                 self.db.conn.execute(
-                    f'CREATE TABLE "{source_name}"."{table_name}" AS '
-                    f'SELECT * FROM {attach_name}."{table_name}"'
+                    f'CREATE TABLE "{safe_source}"."{safe_table}" AS '
+                    f'SELECT * FROM {attach_name}."{safe_table}"'
                 )
                 row_count = self.db.conn.execute(
-                    f'SELECT COUNT(*) FROM "{source_name}"."{table_name}"'
+                    f'SELECT COUNT(*) FROM "{safe_source}"."{safe_table}"'
                 ).fetchone()[0]
                 total_rows += row_count
                 tables_synced += 1
@@ -392,28 +409,36 @@ class SyncEngine:
         row_counts = {}
         table_names = []
 
-        self.db.conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{source_name}"')
+        safe_source = _validate_identifier(source_name)
+        self.db.conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{safe_source}"')
 
         for fp in files:
             file_name = Path(fp).stem
-            table_name = file_name.replace(" ", "_").lower()
+            # Sanitize: lowercase, replace non-alphanumeric with underscore,
+            # ensure starts with letter/underscore
+            sanitized = re.sub(r'[^a-zA-Z0-9_]', '_', file_name).strip('_').lower()
+            if not sanitized or sanitized[0].isdigit():
+                sanitized = f"t_{sanitized}"
+            table_name = sanitized
 
             self._log(f"  Syncing {file_name}...")
 
             try:
+                # Escape single quotes in file path for SQL
+                safe_fp = fp.replace("'", "''")
                 if file_format == "csv":
-                    df = self.db.conn.execute(f"SELECT * FROM read_csv('{fp}')").fetchdf()
+                    df = self.db.conn.execute(f"SELECT * FROM read_csv('{safe_fp}')").fetchdf()
                 elif file_format == "parquet":
-                    df = self.db.conn.execute(f"SELECT * FROM read_parquet('{fp}')").fetchdf()
+                    df = self.db.conn.execute(f"SELECT * FROM read_parquet('{safe_fp}')").fetchdf()
                 elif file_format == "json":
-                    df = self.db.conn.execute(f"SELECT * FROM read_json('{fp}')").fetchdf()
+                    df = self.db.conn.execute(f"SELECT * FROM read_json('{safe_fp}')").fetchdf()
                 else:
                     self._log(f"    Unsupported format: {file_format}")
                     continue
 
                 # Create table
-                self.db.conn.execute(f'DROP TABLE IF EXISTS "{source_name}"."{table_name}"')
-                self.db.conn.execute(f'CREATE TABLE "{source_name}"."{table_name}" AS SELECT * FROM df')
+                self.db.conn.execute(f'DROP TABLE IF EXISTS "{safe_source}"."{table_name}"')
+                self.db.conn.execute(f'CREATE TABLE "{safe_source}"."{table_name}" AS SELECT * FROM df')
 
                 row_count = len(df)
                 total_rows += row_count

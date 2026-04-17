@@ -8,7 +8,7 @@ from typing import Any
 from cheeksbase.core.db import CheeksbaseDB
 
 # Operations that are never allowed through the mutation engine.
-BLOCKED_OPERATIONS = ("DROP", "ALTER", "TRUNCATE")
+BLOCKED_OPERATIONS = ("DROP", "ALTER", "TRUNCATE", "COPY", "ATTACH", "LOAD", "INSTALL")
 
 # Operations the engine knows how to preview + execute.
 SUPPORTED_OPERATIONS = ("UPDATE", "INSERT", "DELETE")
@@ -42,7 +42,32 @@ def _first_word(sql: str) -> str:
     stripped = sql.strip()
     if not stripped:
         return ""
-    return stripped.split()[0].upper()
+    # Strip comments
+    cleaned = re.sub(r'--[^\n]*', '', stripped)
+    cleaned = re.sub(r'/\*.*?\*/', '', cleaned, flags=re.DOTALL)
+    cleaned = cleaned.strip()
+    if not cleaned:
+        return ""
+    upper = cleaned.upper()
+    if upper.startswith("WITH "):
+        # Scan through CTE definitions to find where they end
+        depth = 0
+        i = 0
+        n = len(cleaned)
+        while i < n:
+            ch = cleaned[i]
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+                if depth == 0:
+                    after = cleaned[i + 1:].lstrip()
+                    if after and after[0] == ',':
+                        i += 1  # more CTEs
+                    elif after:
+                        return after.split()[0].upper()
+            i += 1
+    return cleaned.split()[0].upper()
 
 
 def parse_target(sql: str) -> dict[str, Any]:
@@ -61,21 +86,43 @@ def parse_target(sql: str) -> dict[str, Any]:
         "rest": None,
     }
 
+    # Strip WITH CTE prefix so regexes can match the actual operation
+    parse_sql = sql
+    upper = sql.strip().upper()
+    if upper.startswith("WITH "):
+        depth = 0
+        i = 0
+        n = len(sql)
+        while i < n:
+            ch = sql[i]
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+                if depth == 0:
+                    after = sql[i + 1:].lstrip()
+                    if after and after[0] == ',':
+                        i += 1  # more CTEs
+                    elif after:
+                        parse_sql = after
+                        break
+            i += 1
+
     if op == "UPDATE":
-        m = _UPDATE_RE.match(sql)
+        m = _UPDATE_RE.match(parse_sql)
         if m:
             result["schema"] = m.group("schema")
             result["table"] = m.group("table")
             result["set_clause"] = m.group("set_clause").strip() if m.group("set_clause") else None
             result["where"] = m.group("where").strip() if m.group("where") else None
     elif op == "INSERT":
-        m = _INSERT_RE.match(sql)
+        m = _INSERT_RE.match(parse_sql)
         if m:
             result["schema"] = m.group("schema")
             result["table"] = m.group("table")
             result["rest"] = m.group("rest").strip() if m.group("rest") else None
     elif op == "DELETE":
-        m = _DELETE_RE.match(sql)
+        m = _DELETE_RE.match(parse_sql)
         if m:
             result["schema"] = m.group("schema")
             result["table"] = m.group("table")
@@ -117,9 +164,9 @@ def validate_mutation(sql: str) -> list[str]:
         errors.append(f"Could not parse target table from {op} statement.")
         return errors
 
-    # DELETE must have a WHERE clause — prevents catastrophic full-table deletes.
-    if op == "DELETE" and not parsed["where"]:
-        errors.append("DELETE requires a WHERE clause.")
+    # DELETE and UPDATE must have a WHERE clause — prevents catastrophic full-table mutations.
+    if op in ("DELETE", "UPDATE") and not parsed["where"]:
+        errors.append(f"{op} requires a WHERE clause.")
 
     return errors
 
