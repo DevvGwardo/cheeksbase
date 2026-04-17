@@ -260,8 +260,7 @@ def connectors(pretty: bool):
 @click.option("--pretty", is_flag=True, help="Pretty print results")
 def mutations_list(mutation_status: str | None, pretty: bool):
     """List mutations."""
-    from cheeksbase.core.db import CheeksbaseDB
-    from cheeksbase.core.db import META_SCHEMA
+    from cheeksbase.core.db import META_SCHEMA, CheeksbaseDB
 
     with CheeksbaseDB() as db:
         sql = (
@@ -310,8 +309,7 @@ def confirm_mutation(mutation_id: str):
 @click.argument("mutation_id")
 def reject_mutation(mutation_id: str):
     """Reject a pending mutation."""
-    from cheeksbase.core.db import CheeksbaseDB
-    from cheeksbase.core.db import META_SCHEMA
+    from cheeksbase.core.db import META_SCHEMA, CheeksbaseDB
 
     with CheeksbaseDB() as db:
         # Check if mutation exists and is pending

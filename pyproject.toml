@@ -23,6 +23,7 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "pyarrow>=14.0",
+    "numpy>=1.24",
     "faker>=24.0",
     "ruff>=0.4.0",
     "mypy>=1.10",
