@@ -10,6 +10,26 @@ from typing import Any
 
 from cheeksbase.core.db import META_SCHEMA, CheeksbaseDB
 
+# Module-level singleton
+_query_engine_singleton: QueryEngine | None = None
+
+
+def get_query_engine(db: CheeksbaseDB | None = None) -> QueryEngine:
+    """Get or create a shared QueryEngine singleton."""
+    global _query_engine_singleton
+    if _query_engine_singleton is None:
+        _db = db or CheeksbaseDB()
+        _query_engine_singleton = QueryEngine(_db)
+    return _query_engine_singleton
+
+
+def reset_query_engine() -> None:
+    """Reset the singleton (useful for testing or after schema changes)."""
+    global _query_engine_singleton
+    if _query_engine_singleton:
+        _query_engine_singleton.db.close()
+    _query_engine_singleton = None
+
 DEFAULT_QUERY_TIMEOUT_MS = 30_000
 DEFAULT_FRESHNESS_THRESHOLD = 3600  # 1 hour (in seconds)
 
@@ -52,12 +72,22 @@ class QueryEngine:
         """
         start_time = time.monotonic()
 
-        # Check cache first
-        cache_key = f"{sql}:{max_rows}"
+        # Check persistent DB cache first
+        cache_key = f"{hash(sql)}:{max_rows}"
+        try:
+            cached = self.db.get_query_cache(cache_key)
+            if cached:
+                result = {**cached, "_cached": True}
+                if "rows" in result:
+                    result["rows"] = [dict(r) for r in result["rows"]]
+                return result
+        except Exception:
+            pass  # Fall through to query if cache unavailable
+
+        # Check local in-memory cache as fallback
         if use_cache and cache_key in self._query_cache:
             cached = self._query_cache[cache_key]
             if time.time() - cached["timestamp"] < self._cache_ttl:
-                # Return a deep-ish copy to prevent mutation of cached results.
                 result = {**cached["result"], "_cached": True}
                 if "rows" in result:
                     result["rows"] = [dict(r) for r in result["rows"]]
@@ -137,9 +167,44 @@ class QueryEngine:
                 f"or add a WHERE clause to narrow results."
             )
 
-        # Cache the result
+        # Record query history for pattern analysis
+        try:
+            tables_used = self._extract_tables_from_sql(sql)
+            self.db.record_query_history(
+                sql=sql,
+                tables_used=tables_used,
+                rows_returned=len(result_rows),
+                duration_ms=round((time.monotonic() - start_time) * 1000),
+            )
+        except Exception:
+            pass  # Best-effort history
+
+        # Auto-discover query templates from successful queries
+        try:
+            if not error_container and result_rows:
+                first_word = self._get_first_sql_keyword(sql)
+                if first_word == "SELECT":
+                    tables = re.findall(
+                        r'["\']?(\w+)["\']?\s*\.\s*["\']?(\w+)["\']?', sql, re.IGNORECASE
+                    )
+                    for schema, table in tables:
+                        if schema != "_cheeksbase" and schema != "information_schema":
+                            self.db.add_query_template(
+                                schema=schema,
+                                table=table,
+                                sql=sql,
+                                description=f"Auto-discovered from successful query",
+                            )
+        except Exception:
+            pass
+
+        # Cache the result in persistent DB
         if use_cache:
-            # Deep copy rows so mutations to the returned result don't corrupt the cache.
+            try:
+                self.db.set_query_cache(cache_key, sql, max_rows, result, ttl_seconds=self._cache_ttl)
+            except Exception:
+                pass  # Best-effort caching
+            # Also cache locally for fast access
             cached_result = dict(result)
             if "rows" in cached_result:
                 cached_result["rows"] = [dict(r) for r in cached_result["rows"]]
@@ -477,3 +542,12 @@ class QueryEngine:
             # Fallback: route to mutation engine for further validation
             return "WITH"
         return cleaned.split()[0].upper()
+
+    def _extract_tables_from_sql(self, sql: str) -> str | None:
+        """Extract schema.table references from SQL for query history tracking."""
+        refs = re.findall(
+            r'["\']?(\w+)["\']?\s*\.\s*["\']?(\w+)["\']?', sql, re.IGNORECASE
+        )
+        if refs:
+            return ", ".join(f"{s}.{t}" for s, t in refs)
+        return None
