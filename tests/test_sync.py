@@ -12,7 +12,6 @@ import pytest
 from cheeksbase.core.db import CheeksbaseDB
 from cheeksbase.core.sync import SyncEngine, SyncResult
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

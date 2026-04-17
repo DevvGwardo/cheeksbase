@@ -1,17 +1,15 @@
 """Tests for Cheeksbase connector YAML configurations."""
 
-from pathlib import Path
 
 import pytest
 import yaml
 
 from cheeksbase.connectors.registry import (
     BUILTIN_CONFIGS_DIR,
-    get_connector_config,
     get_available_connectors,
+    get_connector_config,
     validate_connector_config,
 )
-
 
 NEW_CONNECTORS = ["github", "hubspot", "postgres", "csv", "slack"]
 

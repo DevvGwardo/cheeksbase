@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from typing import Annotated, Any
 
-from pydantic import Field
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 
 from cheeksbase.core.db import CheeksbaseDB
 from cheeksbase.core.query import QueryEngine
@@ -30,7 +30,6 @@ def _build_instructions(engine: QueryEngine) -> str:
     ]
 
     lines.append("Connected connectors:")
-    has_stale = False
     for connector in connectors:
         table_names = [t["name"] for t in connector["tables"]]
         line = (
@@ -39,7 +38,6 @@ def _build_instructions(engine: QueryEngine) -> str:
         )
         if connector.get("is_stale"):
             line += f" — STALE (last sync: {connector.get('age', '?')} ago)"
-            has_stale = True
         elif connector.get("age"):
             line += f" — fresh ({connector['age']} ago)"
         lines.append(line)
@@ -103,17 +101,17 @@ def create_server() -> FastMCP:
         """Re-sync a connector to get fresh data. Use when data is stale or you need up-to-date results before querying."""
         from cheeksbase.core.config import get_connectors
         from cheeksbase.core.sync import SyncEngine
-        
+
         connectors = get_connectors()
         if connector not in connectors:
             return json.dumps({"error": f"Connector '{connector}' not found"})
-        
+
         connector_config = connectors[connector]
-        
+
         with CheeksbaseDB() as db:
             sync_engine = SyncEngine(db)
             result = sync_engine.sync(connector, connector_config)
-        
+
         return json.dumps({
             "status": result.status,
             "tables_synced": result.tables_synced,
@@ -129,7 +127,7 @@ def create_server() -> FastMCP:
     ) -> str:
         """Annotate a table or column with metadata like descriptions, PII flags, etc."""
         parts = target.split(".")
-        
+
         with CheeksbaseDB() as db:
             if len(parts) == 2:
                 schema, table = parts
@@ -154,7 +152,7 @@ def create_server() -> FastMCP:
                 result = {"annotated": target, "key": key, "value": value}
             else:
                 result = {"error": f"Invalid target '{target}'. Use 'schema.table' or 'schema.table.column'"}
-        
+
         return json.dumps(result, indent=2)
 
     @server.tool()
@@ -163,11 +161,11 @@ def create_server() -> FastMCP:
     ) -> str:
         """Chain multiple tool calls together. Execute them in sequence and return all results."""
         results = []
-        
+
         for call in calls:
             tool_name = call.get("tool", "")
             args = call.get("args", {})
-            
+
             if tool_name == "query":
                 sql = args.get("sql", "")
                 max_rows = args.get("max_rows", 200)
@@ -175,19 +173,19 @@ def create_server() -> FastMCP:
                     eng = QueryEngine(db)
                     result = eng.execute(sql, max_rows=max_rows)
                 results.append({"tool": tool_name, "result": result})
-            
+
             elif tool_name == "describe":
                 table = args.get("table", "")
                 with CheeksbaseDB() as db:
                     eng = QueryEngine(db)
                     result = eng.describe_table(table)
                 results.append({"tool": tool_name, "result": result})
-            
+
             elif tool_name == "sync":
                 connector = args.get("connector", "")
                 from cheeksbase.core.config import get_connectors
                 from cheeksbase.core.sync import SyncEngine
-                
+
                 connectors = get_connectors()
                 if connector in connectors:
                     with CheeksbaseDB() as db:
@@ -200,10 +198,10 @@ def create_server() -> FastMCP:
                     }})
                 else:
                     results.append({"tool": tool_name, "error": f"Connector '{connector}' not found"})
-            
+
             else:
                 results.append({"tool": tool_name, "error": f"Unknown tool: {tool_name}"})
-        
+
         return json.dumps(results, indent=2, default=str)
 
     return server

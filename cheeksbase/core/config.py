@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 from typing import Any
 
 import yaml
-
 
 DEFAULT_DIR = Path.home() / ".cheeksbase"
 CONFIG_FILE = "config.yaml"
@@ -50,7 +48,7 @@ def load_config() -> dict[str, Any]:
         click.echo(f"Error: broken config file at {path}", err=True)
         click.echo(f"YAML parse error: {e}", err=True)
         click.echo("Fix the file manually or delete it and run `cheeksbase init`.", err=True)
-        raise SystemExit(1)
+        raise SystemExit(1) from None
     return config
 
 

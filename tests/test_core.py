@@ -1,11 +1,12 @@
 """Tests for Cheeksbase core functionality."""
 
-import pytest
-from pathlib import Path
-import tempfile
 import shutil
+import tempfile
+from pathlib import Path
 
-from cheeksbase.core.config import init_cheeksbase, get_db_path, add_connector, get_connectors
+import pytest
+
+from cheeksbase.core.config import add_connector, get_connectors, init_cheeksbase
 from cheeksbase.core.db import CheeksbaseDB
 from cheeksbase.core.query import QueryEngine
 
@@ -14,17 +15,18 @@ from cheeksbase.core.query import QueryEngine
 def temp_cheeksbase_dir():
     """Create a temporary Cheeksbase directory for testing."""
     temp_dir = tempfile.mkdtemp()
-    original_dir = Path.home() / ".cheeksbase"
-    
+    Path.home() / ".cheeksbase"
+
     # Monkey patch the default directory
-    import cheeksbase.core.config
     import os
+
+    import cheeksbase.core.config
     original_default = cheeksbase.core.config.DEFAULT_DIR
     original_env = os.environ.pop("CHEEKSBASE_DIR", None)
     cheeksbase.core.config.DEFAULT_DIR = Path(temp_dir)
-    
+
     yield Path(temp_dir)
-    
+
     # Restore original
     cheeksbase.core.config.DEFAULT_DIR = original_default
     if original_env is not None:
@@ -44,12 +46,12 @@ def test_init_cheeksbase(temp_cheeksbase_dir):
 def test_database_creation(temp_cheeksbase_dir):
     """Test database creation and metadata tables."""
     init_cheeksbase()
-    
+
     with CheeksbaseDB() as db:
         # Check that metadata schema exists
         schemas = db.get_schemas()
         assert "_cheeksbase" in schemas
-        
+
         # Check that metadata tables exist
         tables = db.get_tables("_cheeksbase")
         expected_tables = ["sync_log", "tables", "columns", "live_rows", "mutations", "relationships", "metadata"]
@@ -60,7 +62,7 @@ def test_database_creation(temp_cheeksbase_dir):
 def test_query_engine(temp_cheeksbase_dir):
     """Test query engine functionality."""
     init_cheeksbase()
-    
+
     with CheeksbaseDB() as db:
         # Create a test table
         db.conn.execute('CREATE SCHEMA test_schema')
@@ -76,11 +78,11 @@ def test_query_engine(temp_cheeksbase_dir):
             (1, 'Alice', 'alice@example.com'),
             (2, 'Bob', 'bob@example.com')
         ''')
-        
+
         # Test query engine
         engine = QueryEngine(db)
         result = engine.execute("SELECT * FROM test_schema.users")
-        
+
         assert "error" not in result
         assert result["row_count"] == 2
         assert len(result["columns"]) == 3
@@ -90,10 +92,10 @@ def test_query_engine(temp_cheeksbase_dir):
 def test_connectors_config(temp_cheeksbase_dir):
     """Test connector configuration."""
     init_cheeksbase()
-    
+
     # Add a connector
     add_connector("test_connector", "rest_api", {"api_key": "***"})
-    
+
     # Get connectors
     connectors = get_connectors()
     assert "test_connector" in connectors

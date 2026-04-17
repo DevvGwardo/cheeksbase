@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-import json
 import re
 import time
 from datetime import datetime, timezone
 from typing import Any
 
-from cheeksbase.core.db import CheeksbaseDB, META_SCHEMA
+from cheeksbase.core.db import META_SCHEMA, CheeksbaseDB
 
 
 class QueryEngine:
     """Execute SQL queries with caching and freshness checks."""
-    
+
     def __init__(self, db: CheeksbaseDB):
         self.db = db
         self._query_cache: dict[str, Any] = {}
@@ -117,7 +116,7 @@ class QueryEngine:
         refs = re.findall(
             r'\"?(\w+)\"?\s*\.\s*\"?(\w+)\"?', sql, re.IGNORECASE
         )
-        for schema, table in refs:
+        for schema, _table in refs:
             # Skip metadata tables
             if schema == META_SCHEMA:
                 continue
@@ -337,7 +336,7 @@ class QueryEngine:
         """Suggest a similar table name."""
         parts = table_ref.split(".")
         target = parts[-1] if parts else table_ref
-        
+
         all_tables = []
         schemas = self.db.get_schemas()
         for schema in schemas:
@@ -346,12 +345,12 @@ class QueryEngine:
             tables = self.db.get_tables(schema)
             for table in tables:
                 all_tables.append(f"{schema}.{table}")
-        
+
         # Simple similarity: find tables containing the target string
         for table in all_tables:
             if target.lower() in table.lower():
                 return table
-        
+
         return None
 
     def clear_cache(self) -> None:

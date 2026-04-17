@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import os
-import shutil
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -17,7 +14,6 @@ from cheeksbase.agents.detectors import (
 )
 from cheeksbase.agents.semantic import SemanticAgent
 from cheeksbase.core.db import CheeksbaseDB
-
 
 # ---------------------------------------------------------------------------
 # Detector unit tests — pure functions, no DB needed

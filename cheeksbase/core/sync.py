@@ -12,7 +12,7 @@ from typing import Any
 
 import duckdb
 
-from cheeksbase.core.db import CheeksbaseDB, META_SCHEMA
+from cheeksbase.core.db import CheeksbaseDB
 
 
 @dataclass
@@ -30,7 +30,7 @@ class SyncResult:
 
 class SyncEngine:
     """Syncs data from sources into DuckDB."""
-    
+
     def __init__(self, db: CheeksbaseDB):
         self.db = db
         self._sync_t0: float | None = None
@@ -45,7 +45,7 @@ class SyncEngine:
         self,
         source_name: str,
         source_config: dict[str, Any],
-        on_progress: "Callable[[int, int], None] | None" = None,
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> SyncResult:
         """Sync a single source into DuckDB."""
         source_type = source_config["type"]
@@ -57,7 +57,7 @@ class SyncEngine:
         sync_id = None
         try:
             sync_id = self.db.log_sync_start(source_name, source_type)
-            
+
             # Route to appropriate sync method based on type
             if source_type == "rest_api":
                 result = self._sync_rest_api(source_name, credentials, source_config)
@@ -121,6 +121,7 @@ class SyncEngine:
     ) -> SyncResult:
         """Sync data from a REST API."""
         import httpx
+
         from cheeksbase.connectors.registry import get_connector_config
 
         # Load connector config from YAML
@@ -240,18 +241,18 @@ class SyncEngine:
 
                     # Create schema and table
                     self.db.conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{source_name}"')
-                    
+
                     # Convert to DuckDB table
-                    df = self._list_to_duckdb(data, resource_name, primary_key)
+                    df = self._list_to_duckdb(data, resource_name, primary_key)  # noqa: F841
                     self.db.conn.execute(f'DROP TABLE IF EXISTS "{source_name}"."{resource_name}"')
                     self.db.conn.execute(f'CREATE TABLE "{source_name}"."{resource_name}" AS SELECT * FROM df')
-                    
+
                     row_count = len(data)
                     total_rows += row_count
                     tables_synced += 1
                     row_counts[resource_name] = row_count
                     table_names.append(resource_name)
-                    
+
                     self._log(f"    Synced {row_count:,} rows")
 
                 except Exception as e:
@@ -444,6 +445,7 @@ class SyncEngine:
     ) -> SyncResult:
         """Sync data from a GraphQL API."""
         import httpx
+
         from cheeksbase.connectors.registry import get_connector_config
 
         # Load connector config from YAML
@@ -482,7 +484,7 @@ class SyncEngine:
                     response.raise_for_status()
 
                     result = response.json()
-                    
+
                     # Extract data from response
                     data = result
                     for key in data_path.split("."):
@@ -502,19 +504,19 @@ class SyncEngine:
 
                     # Create schema and table
                     self.db.conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{source_name}"')
-                    
+
                     # Convert to DuckDB table
                     primary_key = resource.get("primary_key", "id")
-                    df = self._list_to_duckdb(data, resource_name, primary_key)
+                    df = self._list_to_duckdb(data, resource_name, primary_key)  # noqa: F841
                     self.db.conn.execute(f'DROP TABLE IF EXISTS "{source_name}"."{resource_name}"')
                     self.db.conn.execute(f'CREATE TABLE "{source_name}"."{resource_name}" AS SELECT * FROM df')
-                    
+
                     row_count = len(data)
                     total_rows += row_count
                     tables_synced += 1
                     row_counts[resource_name] = row_count
                     table_names.append(resource_name)
-                    
+
                     self._log(f"    Synced {row_count:,} rows")
 
                 except Exception as e:
@@ -534,7 +536,7 @@ class SyncEngine:
     def _build_auth_headers(self, auth_config: dict[str, Any], credentials: dict[str, str]) -> dict[str, str]:
         """Build authentication headers."""
         auth_type = auth_config.get("type", "")
-        
+
         if auth_type == "bearer":
             token = credentials.get(auth_config.get("token_field", "api_key"), "")
             return {"Authorization": f"Bearer {token}"}
@@ -556,12 +558,12 @@ class SyncEngine:
         """Convert a list of dicts to a DuckDB relation."""
         if not data:
             return self.db.conn.execute(f"SELECT NULL as {primary_key} WHERE 1=0")
-        
+
         # Get all unique keys from all records
         all_keys = set()
         for record in data:
             all_keys.update(record.keys())
-        
+
         # Create a list of tuples for DuckDB
         rows = []
         for record in data:
@@ -573,7 +575,7 @@ class SyncEngine:
                     value = json.dumps(value)
                 row.append(value)
             rows.append(tuple(row))
-        
+
         # Create column definitions
         columns = []
         for key in sorted(all_keys):
@@ -590,14 +592,14 @@ class SyncEngine:
             else:
                 col_type = "VARCHAR"
             columns.append(f"{key} {col_type}")
-        
+
         # Create table
         create_sql = f"CREATE TABLE {table_name} ({', '.join(columns)})"
         self.db.conn.execute(create_sql)
-        
+
         # Insert data
         placeholders = ", ".join(["?"] * len(all_keys))
         insert_sql = f"INSERT INTO {table_name} VALUES ({placeholders})"
         self.db.conn.executemany(insert_sql, rows)
-        
+
         return self.db.conn.execute(f"SELECT * FROM {table_name}")

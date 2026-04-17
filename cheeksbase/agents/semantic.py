@@ -102,7 +102,7 @@ class SemanticAgent:
         if self._owns_db:
             self.db.close()
 
-    def __enter__(self) -> "SemanticAgent":
+    def __enter__(self) -> SemanticAgent:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:

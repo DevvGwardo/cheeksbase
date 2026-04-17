@@ -7,7 +7,6 @@ from typing import Any
 
 from cheeksbase.core.db import CheeksbaseDB
 
-
 # Operations that are never allowed through the mutation engine.
 BLOCKED_OPERATIONS = ("DROP", "ALTER", "TRUNCATE")
 

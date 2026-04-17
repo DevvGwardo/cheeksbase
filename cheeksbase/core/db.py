@@ -111,7 +111,7 @@ _META_TABLES = ["sync_log", "tables", "columns", "live_rows", "mutations", "rela
 
 class CheeksbaseDB:
     """DuckDB wrapper with metadata management."""
-    
+
     def __init__(self, db_path: Path | str | None = None):
         self.db_path = str(db_path or get_db_path())
         self._conn: duckdb.DuckDBPyConnection | None = None
@@ -227,7 +227,7 @@ class CheeksbaseDB:
         tables = self.get_tables(schema_name)
         for table_name in tables:
             row_count = row_counts.get(table_name, 0) if row_counts else self.get_row_count(schema_name, table_name)
-            
+
             # Update tables metadata
             self.conn.execute(
                 f"INSERT INTO {META_SCHEMA}.tables "
@@ -237,7 +237,7 @@ class CheeksbaseDB:
                 f"DO UPDATE SET row_count = excluded.row_count, last_sync = excluded.last_sync",
                 [connector_name, schema_name, table_name, row_count],
             )
-            
+
             # Update column metadata if annotations provided
             if annotations and table_name in annotations:
                 table_annotations = annotations[table_name]

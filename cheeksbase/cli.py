@@ -4,17 +4,18 @@ from __future__ import annotations
 
 import json
 import sys
+from typing import Any
 
 import click
 
 from cheeksbase import __version__
 from cheeksbase.core.config import (
-    init_cheeksbase,
-    get_db_path,
-    get_connectors_dir,
     add_connector,
-    remove_connector,
     get_connectors,
+    get_connectors_dir,
+    get_db_path,
+    init_cheeksbase,
+    remove_connector,
 )
 
 
@@ -29,13 +30,13 @@ def cli():
 def init():
     """Initialize Cheeksbase (create config directory and database)."""
     ddir = init_cheeksbase()
-    
+
     # Touch the database to create it
     from cheeksbase.core.db import CheeksbaseDB
     db = CheeksbaseDB()
     _ = db.conn  # triggers initialization
     db.close()
-    
+
     click.echo(f"Cheeksbase initialized at {ddir}")
     click.echo(f"Database: {get_db_path()}")
 
@@ -64,26 +65,26 @@ def add(
     sync_interval: str | None,
 ):
     """Add a new data connector.
-    
+
     Examples:
       cheeksbase add stripe --api-key sk_test_...
       cheeksbase add postgres --connection-string postgresql://...
       cheeksbase add csv_data --path ./data/*.csv --format csv
     """
     # Import here to avoid circular imports
-    from cheeksbase.connectors.registry import get_connector_config, get_available_connectors
-    
+    from cheeksbase.connectors.registry import get_available_connectors
+
     # Check if connector type exists
     available = get_available_connectors()
     if source_type not in available:
         click.echo(f"Unknown connector type: {source_type}", err=True)
         click.echo(f"Available types: {', '.join(available)}", err=True)
         sys.exit(1)
-    
+
     # Use source_type as name if not provided
     if not name:
         name = source_type
-    
+
     # Build credentials dict
     credentials = {}
     if api_key:
@@ -96,16 +97,16 @@ def add(
         credentials["password"] = password
     if connection_string:
         credentials["connection_string"] = connection_string
-    
+
     # Add connector
     add_connector(name, source_type, credentials, sync_interval)
-    
+
     click.echo(f"Added connector: {name} ({source_type})")
-    
+
     # Copy connector config if it doesn't exist
     import shutil
     from pathlib import Path
-    
+
     source_config_path = get_connectors_dir() / f"{source_type}.yaml"
     if not source_config_path.exists():
         # Try to copy from package
@@ -113,7 +114,7 @@ def add(
         if package_config_path.exists():
             shutil.copy(package_config_path, source_config_path)
             click.echo(f"Copied connector config to {source_config_path}")
-    
+
     # Show next steps
     click.echo("\nNext steps:")
     click.echo(f"  cheeksbase sync {name}       # sync data from this connector")
@@ -128,7 +129,7 @@ def remove(name: str):
     if name not in connectors:
         click.echo(f"Connector '{name}' not found", err=True)
         sys.exit(1)
-    
+
     remove_connector(name)
     click.echo(f"Removed connector: {name}")
 
@@ -139,7 +140,7 @@ def remove(name: str):
 @click.option("--force", is_flag=True, help="Force sync even if not stale")
 def sync(name: str | None, sync_all: bool, force: bool):
     """Sync data from connectors.
-    
+
     Examples:
       cheeksbase sync stripe          # sync stripe connector
       cheeksbase sync --all           # sync all connectors
@@ -147,13 +148,13 @@ def sync(name: str | None, sync_all: bool, force: bool):
     """
     from cheeksbase.core.db import CheeksbaseDB
     from cheeksbase.core.sync import SyncEngine
-    
+
     connectors = get_connectors()
-    
+
     if not connectors:
         click.echo("No connectors configured. Add one with: cheeksbase add <type>", err=True)
         sys.exit(1)
-    
+
     if sync_all:
         sync_list = list(connectors.keys())
     elif name:
@@ -164,16 +165,16 @@ def sync(name: str | None, sync_all: bool, force: bool):
     else:
         click.echo("Please specify a connector name or use --all", err=True)
         sys.exit(1)
-    
+
     with CheeksbaseDB() as db:
         sync_engine = SyncEngine(db)
-        
+
         for connector_name in sync_list:
             connector_config = connectors[connector_name]
             click.echo(f"Syncing {connector_name}...")
-            
+
             result = sync_engine.sync(connector_name, connector_config)
-            
+
             if result.status == "success":
                 click.echo(f"  ✓ Synced {result.tables_synced} tables, {result.rows_synced:,} rows")
             else:
@@ -187,22 +188,22 @@ def sync(name: str | None, sync_all: bool, force: bool):
 @click.option("--no-cache", is_flag=True, help="Disable query caching")
 def query(sql: str, max_rows: int, pretty: bool, no_cache: bool):
     """Execute a SQL query.
-    
+
     Examples:
       cheeksbase query "SELECT * FROM stripe.customers LIMIT 10"
       cheeksbase query "SELECT COUNT(*) FROM hubspot.contacts" --pretty
     """
     from cheeksbase.core.db import CheeksbaseDB
     from cheeksbase.core.query import QueryEngine
-    
+
     with CheeksbaseDB() as db:
         engine = QueryEngine(db)
         result = engine.execute(sql, max_rows=max_rows, use_cache=not no_cache)
-        
+
         if "error" in result:
             click.echo(f"Error: {result['error']}", err=True)
             sys.exit(1)
-        
+
         if pretty:
             _print_pretty(result)
         else:
@@ -214,22 +215,22 @@ def query(sql: str, max_rows: int, pretty: bool, no_cache: bool):
 @click.option("--pretty", is_flag=True, help="Pretty print results")
 def describe(table: str, pretty: bool):
     """Describe a table's schema and metadata.
-    
+
     Examples:
       cheeksbase describe stripe.customers
       cheeksbase describe customers --pretty
     """
     from cheeksbase.core.db import CheeksbaseDB
     from cheeksbase.core.query import QueryEngine
-    
+
     with CheeksbaseDB() as db:
         engine = QueryEngine(db)
         result = engine.describe_table(table)
-        
+
         if "error" in result:
             click.echo(f"Error: {result['error']}", err=True)
             sys.exit(1)
-        
+
         if pretty:
             _print_table_description(result)
         else:
@@ -242,11 +243,11 @@ def connectors(pretty: bool):
     """List all configured connectors."""
     from cheeksbase.core.db import CheeksbaseDB
     from cheeksbase.core.query import QueryEngine
-    
+
     with CheeksbaseDB() as db:
         engine = QueryEngine(db)
         result = engine.list_connectors()
-        
+
         if pretty:
             _print_connectors(result)
         else:
@@ -260,7 +261,7 @@ def connectors(pretty: bool):
 def mutations_list(mutation_status: str | None, pretty: bool):
     """List mutations."""
     from cheeksbase.core.db import CheeksbaseDB
-    from cheeksbase.core.sync import META_SCHEMA
+    from cheeksbase.core.db import META_SCHEMA
 
     with CheeksbaseDB() as db:
         sql = (
@@ -310,7 +311,7 @@ def confirm_mutation(mutation_id: str):
 def reject_mutation(mutation_id: str):
     """Reject a pending mutation."""
     from cheeksbase.core.db import CheeksbaseDB
-    from cheeksbase.core.sync import META_SCHEMA
+    from cheeksbase.core.db import META_SCHEMA
 
     with CheeksbaseDB() as db:
         # Check if mutation exists and is pending
@@ -343,7 +344,7 @@ def reject_mutation(mutation_id: str):
 def serve(port: int, host: str):
     """Start the MCP server for AI agents."""
     from cheeksbase.mcp.server import run_server
-    
+
     click.echo(f"Starting Cheeksbase MCP server on {host}:{port}")
     run_server(host=host, port=port)
 
@@ -353,7 +354,7 @@ def serve(port: int, host: str):
 def sources(available: bool):
     """List data sources."""
     from cheeksbase.connectors.registry import get_available_connectors, get_connector_info
-    
+
     if available:
         connector_types = get_available_connectors()
         click.echo("Available connector types:")
@@ -367,7 +368,7 @@ def sources(available: bool):
         if not connectors:
             click.echo("No connectors configured. Add one with: cheeksbase add <type>")
             return
-        
+
         click.echo("Configured connectors:")
         for name, config in connectors.items():
             connector_type = config.get("type", "unknown")
@@ -378,31 +379,31 @@ def _print_pretty(result: dict) -> None:
     """Pretty print query results as a table."""
     columns = result.get("columns", [])
     rows = result.get("rows", [])
-    
+
     if not columns or not rows:
         click.echo("No results")
         return
-    
+
     # Calculate column widths
     col_widths = {col: len(col) for col in columns}
     for row in rows:
         for col in columns:
             val = str(row.get(col, ""))
             col_widths[col] = max(col_widths[col], len(val))
-    
+
     # Print header
     header = " | ".join(col.ljust(col_widths[col]) for col in columns)
     click.echo(header)
     click.echo("-" * len(header))
-    
+
     # Print rows
     for row in rows:
         line = " | ".join(
-            str(row.get(col, "")).ljust(col_widths[col]) 
+            str(row.get(col, "")).ljust(col_widths[col])
             for col in columns
         )
         click.echo(line)
-    
+
     # Print summary
     total_rows = result.get("total_rows", len(rows))
     row_count = result.get("row_count", len(rows))
@@ -420,12 +421,12 @@ def _print_table_description(result: dict) -> None:
     description = result.get("description", "")
     columns = result.get("columns", [])
     related_tables = result.get("related_tables", [])
-    
+
     click.echo(f"{schema}.{table} ({row_count:,} rows)")
     if description:
         click.echo(f"Description: {description}")
     click.echo()
-    
+
     if columns:
         click.echo("Columns:")
         for col in columns:
@@ -433,12 +434,12 @@ def _print_table_description(result: dict) -> None:
             col_type = col.get("type", "")
             nullable = "NULL" if col.get("nullable", True) else "NOT NULL"
             col_desc = col.get("description", "")
-            
+
             line = f"  {col_name:20} {col_type:15} {nullable:8}"
             if col_desc:
                 line += f"  -- {col_desc}"
             click.echo(line)
-    
+
     if related_tables:
         click.echo("\nRelated tables:")
         for related in related_tables:
@@ -446,7 +447,7 @@ def _print_table_description(result: dict) -> None:
             join = related.get("join", "")
             cardinality = related.get("cardinality", "")
             desc = related.get("description", "")
-            
+
             click.echo(f"  {other_table} ({cardinality})")
             if join:
                 click.echo(f"    {join}")
@@ -457,11 +458,11 @@ def _print_table_description(result: dict) -> None:
 def _print_connectors(result: dict) -> None:
     """Pretty print connectors list."""
     connectors = result.get("connectors", [])
-    
+
     if not connectors:
         click.echo("No connectors configured")
         return
-    
+
     click.echo("Connectors:")
     for connector in connectors:
         name = connector.get("name", "")
@@ -469,11 +470,11 @@ def _print_connectors(result: dict) -> None:
         total_rows = connector.get("total_rows", 0)
         last_sync = connector.get("last_sync", "never")
         is_stale = connector.get("is_stale", False)
-        
+
         status = "STALE" if is_stale else "fresh"
         click.echo(f"  {name:20} {table_count} tables, {total_rows:,} rows")
         click.echo(f"    Last sync: {last_sync} ({status})")
-        
+
         tables = connector.get("tables", [])
         if tables:
             click.echo("    Tables:")

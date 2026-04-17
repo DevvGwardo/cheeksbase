@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -327,7 +326,7 @@ class TestMutations:
 
     def test_mutations_with_data(self, initialized_env: Path):
         """Insert a fake mutation row and verify it shows up."""
-        from cheeksbase.core.db import CheeksbaseDB, META_SCHEMA
+        from cheeksbase.core.db import META_SCHEMA, CheeksbaseDB
 
         runner = CliRunner()
         with CheeksbaseDB() as db:
@@ -347,7 +346,7 @@ class TestMutations:
         assert data[0]["status"] == "pending"
 
     def test_mutations_filter_by_status(self, initialized_env: Path):
-        from cheeksbase.core.db import CheeksbaseDB, META_SCHEMA
+        from cheeksbase.core.db import META_SCHEMA, CheeksbaseDB
 
         runner = CliRunner()
         with CheeksbaseDB() as db:
@@ -370,7 +369,7 @@ class TestMutations:
         assert data[0]["mutation_id"] == "mut-p"
 
     def test_mutations_pretty(self, initialized_env: Path):
-        from cheeksbase.core.db import CheeksbaseDB, META_SCHEMA
+        from cheeksbase.core.db import META_SCHEMA, CheeksbaseDB
 
         runner = CliRunner()
         with CheeksbaseDB() as db:

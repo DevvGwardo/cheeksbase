@@ -8,7 +8,6 @@ shape their provider requires.
 
 from __future__ import annotations
 
-
 SYSTEM_PROMPT_TABLE_DESCRIPTION = """\
 You are a database semantic-annotation assistant. Given a table name and its
 column list, produce a concise one- or two-sentence description of what the

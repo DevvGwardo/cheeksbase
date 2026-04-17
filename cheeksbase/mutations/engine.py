@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from cheeksbase.core.db import CheeksbaseDB, META_SCHEMA
+from cheeksbase.core.db import META_SCHEMA, CheeksbaseDB
 from cheeksbase.mutations.executor import execute_mutation
 from cheeksbase.mutations.preview import (
     generate_preview,

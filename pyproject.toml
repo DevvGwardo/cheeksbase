@@ -52,6 +52,7 @@ select = [
 ]
 ignore = [
     "E501",  # line too long (handled by formatter)
+    "B905",  # zip() without strict= — len(cols)==len(rows) is guaranteed by DB
 ]
 
 [tool.ruff.lint.isort]
