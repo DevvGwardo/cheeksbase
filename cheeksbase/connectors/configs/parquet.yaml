@@ -1,0 +1,7 @@
+# Parquet File Connector
+name: parquet
+type: file
+description: Parquet file connector with glob path support and auto-schema detection
+path: ./data/*.parquet
+format: parquet
+auto_schema: true

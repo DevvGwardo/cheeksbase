@@ -18,13 +18,17 @@ def temp_cheeksbase_dir():
     
     # Monkey patch the default directory
     import cheeksbase.core.config
+    import os
     original_default = cheeksbase.core.config.DEFAULT_DIR
+    original_env = os.environ.pop("CHEEKSBASE_DIR", None)
     cheeksbase.core.config.DEFAULT_DIR = Path(temp_dir)
     
     yield Path(temp_dir)
     
     # Restore original
     cheeksbase.core.config.DEFAULT_DIR = original_default
+    if original_env is not None:
+        os.environ["CHEEKSBASE_DIR"] = original_env
     shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -88,13 +92,13 @@ def test_connectors_config(temp_cheeksbase_dir):
     init_cheeksbase()
     
     # Add a connector
-    add_connector("test_connector", "rest_api", {"api_key": "test123"})
+    add_connector("test_connector", "rest_api", {"api_key": "***"})
     
     # Get connectors
     connectors = get_connectors()
     assert "test_connector" in connectors
     assert connectors["test_connector"]["type"] == "rest_api"
-    assert connectors["test_connector"]["credentials"]["api_key"] == "test123"
+    assert connectors["test_connector"]["credentials"]["api_key"] == "***"
 
 
 if __name__ == "__main__":

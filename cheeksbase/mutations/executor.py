@@ -122,9 +122,37 @@ def _write_back_to_source(
     if method is None:
         return {"ok": False, "error": f"no HTTP mapping for operation {op}"}
 
+    # Serialize mutation into JSON request body for the HTTP call
+    body: dict[str, Any] | None = None
+    if op == "UPDATE":
+        # Parse SET clause into a dict of column -> value
+        set_clause = parsed.get("set_clause", "") or ""
+        set_fields: dict[str, Any] = {}
+        for part in set_clause.split(","):
+            part = part.strip()
+            if "=" in part:
+                key, val = part.split("=", 1)
+                key = key.strip().strip('"')
+                val = val.strip().strip("'")
+                set_fields[key] = val
+        body = {"table": parsed.get("table", ""), "set": set_fields}
+        where = parsed.get("where")
+        if where:
+            body["where"] = where
+    elif op == "INSERT":
+        body = {"table": parsed.get("table", ""), "values": parsed.get("rest", "")}
+    elif op == "DELETE":
+        body = {"table": parsed.get("table", "")}
+        where = parsed.get("where")
+        if where:
+            body["where"] = where
+
     try:
         with httpx.Client(timeout=15.0) as client:
-            response = client.request(method, url, headers=headers)
+            kwargs: dict[str, Any] = {"headers": headers}
+            if body is not None:
+                kwargs["json"] = body
+            response = client.request(method, url, **kwargs)
         if response.status_code >= 400:
             return {"ok": False, "error": f"source returned {response.status_code}: {response.text[:200]}"}
         return {"ok": True, "response": {"status": response.status_code, "url": url}}

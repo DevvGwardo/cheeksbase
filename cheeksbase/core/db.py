@@ -138,9 +138,12 @@ class CheeksbaseDB:
             return self.conn.execute(sql, params)
         return self.conn.execute(sql)
 
-    def query(self, sql: str) -> list[dict[str, Any]]:
+    def query(self, sql: str, params: list | None = None) -> list[dict[str, Any]]:
         """Execute a query and return results as a list of dicts."""
-        result = self.conn.execute(sql)
+        if params:
+            result = self.conn.execute(sql, params)
+        else:
+            result = self.conn.execute(sql)
         columns = [desc[0] for desc in result.description]
         rows = result.fetchall()
         return [dict(zip(columns, row)) for row in rows]

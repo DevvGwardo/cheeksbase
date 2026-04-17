@@ -1,0 +1,7 @@
+# JSON File Connector
+name: json
+type: file
+description: JSON file connector with glob path support and auto-schema detection
+path: ./data/*.json
+format: json
+auto_schema: true

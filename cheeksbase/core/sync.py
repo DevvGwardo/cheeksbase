@@ -77,6 +77,15 @@ class SyncEngine:
                     row_counts=result.row_counts,
                 )
 
+                # Run semantic auto-annotation after sync
+                try:
+                    from cheeksbase.agents.semantic import SemanticAgent
+                    agent = SemanticAgent(db=self.db)
+                    annotation_result = agent.annotate_connector(source_name)
+                    self._log(f"  {annotation_result.summary()}")
+                except Exception as e:
+                    self._log(f"  Semantic annotation skipped: {e}")
+
             # Clear live data
             self.db.clear_live_rows(source_name)
 
@@ -139,22 +148,88 @@ class SyncEngine:
 
                 self._log(f"  Syncing {resource_name}...")
 
-                try:
-                    # Fetch data from API
-                    url = f"{base_url.rstrip('/')}/{endpoint.lstrip('/')}"
-                    response = client.get(url, headers=headers)
-                    response.raise_for_status()
+                # Pagination config from resource or connector
+                pagination = resource.get("pagination", config.get("pagination", {}))
+                pag_type = pagination.get("type", "")
+                page_size = pagination.get("page_size", 100)
+                cursor_field = pagination.get("cursor_field", "cursor")
+                next_field = pagination.get("next_field", "next_cursor")
+                data_field = pagination.get("data_field", "data")
+                offset_param = pagination.get("offset_param", "offset")
+                limit_param = pagination.get("limit_param", "limit")
 
-                    data = response.json()
-                    
-                    # Handle different response formats
-                    if isinstance(data, dict):
-                        # Some APIs wrap results in a key
-                        if len(data) == 1:
-                            key = next(iter(data))
-                            if isinstance(data[key], list):
-                                data = data[key]
-                    
+                try:
+                    # Fetch data from API (with pagination if configured)
+                    all_data: list[dict] = []
+                    base_url_fetch = f"{base_url.rstrip('/')}/{endpoint.lstrip('/')}"
+
+                    if pag_type == "cursor":
+                        # Cursor-based pagination
+                        cursor: str | None = None
+                        while True:
+                            params: dict[str, Any] = {limit_param: page_size}
+                            if cursor is not None:
+                                params[cursor_field] = cursor
+                            response = client.get(base_url_fetch, headers=headers, params=params)
+                            response.raise_for_status()
+                            data = response.json()
+                            # Extract data from nested wrapper if needed
+                            if isinstance(data, dict) and data_field in data:
+                                page_data = data[data_field]
+                            elif isinstance(data, list):
+                                page_data = data
+                            else:
+                                page_data = [data] if isinstance(data, dict) else []
+                            if not page_data:
+                                break
+                            all_data.extend(page_data)
+                            # Get next cursor
+                            if isinstance(data, dict) and next_field in data:
+                                cursor = data[next_field]
+                                if not cursor:
+                                    break
+                            else:
+                                break
+                            if len(page_data) < page_size:
+                                break
+                    elif pag_type == "offset":
+                        # Offset/limit pagination
+                        offset = 0
+                        while True:
+                            params = {offset_param: offset, limit_param: page_size}
+                            response = client.get(base_url_fetch, headers=headers, params=params)
+                            response.raise_for_status()
+                            data = response.json()
+                            if isinstance(data, dict) and data_field in data:
+                                page_data = data[data_field]
+                            elif isinstance(data, list):
+                                page_data = data
+                            else:
+                                page_data = [data] if isinstance(data, dict) else []
+                            if not page_data:
+                                break
+                            all_data.extend(page_data)
+                            if len(page_data) < page_size:
+                                break
+                            offset += page_size
+                    else:
+                        # No pagination — single fetch
+                        response = client.get(base_url_fetch, headers=headers)
+                        response.raise_for_status()
+                        data = response.json()
+                        if isinstance(data, dict):
+                            # Some APIs wrap results in a key
+                            if len(data) == 1:
+                                key = next(iter(data))
+                                if isinstance(data[key], list):
+                                    data = data[key]
+                        if not isinstance(data, list):
+                            self._log(f"    Warning: Unexpected response format for {resource_name}")
+                            continue
+                        all_data = data
+
+                    data = all_data
+
                     if not isinstance(data, list):
                         self._log(f"    Warning: Unexpected response format for {resource_name}")
                         continue
@@ -204,20 +279,90 @@ class SyncEngine:
         if not connection_string:
             raise ValueError("Database connection string required")
 
-        # For now, just create a view to the remote database
-        # In a full implementation, we'd use SQLAlchemy or similar
         self.db.conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{source_name}"')
-        
-        # Create a simple view that queries the remote database
-        # This is a simplified implementation
-        self._log(f"  Database sync not fully implemented yet")
-        
+
+        # Attach the remote database as a duckdb attachment
+        attach_name = f"_remote_{source_name}"
+        try:
+            # Detach if already attached from a previous sync
+            self.db.conn.execute(f"DETACH DATABASE IF EXISTS {attach_name}")
+        except Exception:
+            pass
+
+        self._log(f"  Attaching remote database for {source_name}")
+
+        # Build ATTACH options from config
+        read_only = config.get("read_only", True)
+        tables_cfg = config.get("tables", [])
+
+        try:
+            attach_sql = f"ATTACH '{connection_string}' AS {attach_name}"
+            if read_only:
+                attach_sql += " (READ_ONLY)"
+            self.db.conn.execute(attach_sql)
+        except Exception as e:
+            self._log(f"  Could not attach remote database: {e}")
+            return SyncResult(
+                connector_name=source_name,
+                connector_type="database",
+                tables_synced=0,
+                rows_synced=0,
+                status="success",
+            )
+
+        # Discover remote tables
+        remote_tables = self.db.conn.execute(
+            f"SELECT table_name FROM {attach_name}.information_schema.tables "
+            f"WHERE table_schema = 'public' OR table_schema = 'main'"
+        ).fetchall()
+
+        total_rows = 0
+        tables_synced = 0
+        row_counts: dict[str, int] = {}
+        table_names: list[str] = []
+
+        # Filter to configured tables if specified
+        allowed = {t["name"] for t in tables_cfg} if tables_cfg else None
+
+        for (table_name,) in remote_tables:
+            if allowed and table_name not in allowed:
+                continue
+
+            self._log(f"  Syncing {table_name}...")
+            try:
+                self.db.conn.execute(
+                    f'DROP TABLE IF EXISTS "{source_name}"."{table_name}"'
+                )
+                self.db.conn.execute(
+                    f'CREATE TABLE "{source_name}"."{table_name}" AS '
+                    f'SELECT * FROM {attach_name}."{table_name}"'
+                )
+                row_count = self.db.conn.execute(
+                    f'SELECT COUNT(*) FROM "{source_name}"."{table_name}"'
+                ).fetchone()[0]
+                total_rows += row_count
+                tables_synced += 1
+                row_counts[table_name] = row_count
+                table_names.append(table_name)
+                self._log(f"    Synced {row_count:,} rows")
+            except Exception as e:
+                self._log(f"    Error syncing {table_name}: {e}")
+                continue
+
+        # Clean up attachment
+        try:
+            self.db.conn.execute(f"DETACH DATABASE {attach_name}")
+        except Exception:
+            pass
+
         return SyncResult(
             connector_name=source_name,
             connector_type="database",
-            tables_synced=0,
-            rows_synced=0,
+            tables_synced=tables_synced,
+            rows_synced=total_rows,
             status="success",
+            row_counts=row_counts,
+            table_names=table_names,
         )
 
     def _sync_file(

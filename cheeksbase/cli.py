@@ -253,6 +253,90 @@ def connectors(pretty: bool):
             click.echo(json.dumps(result, indent=2, default=str))
 
 
+@cli.command("mutations")
+@click.option("--status", "mutation_status", default=None,
+              help="Filter by status (pending, executed, failed)")
+@click.option("--pretty", is_flag=True, help="Pretty print results")
+def mutations_list(mutation_status: str | None, pretty: bool):
+    """List mutations."""
+    from cheeksbase.core.db import CheeksbaseDB
+    from cheeksbase.core.sync import META_SCHEMA
+
+    with CheeksbaseDB() as db:
+        sql = (
+            f"SELECT mutation_id, connector_name, table_name, operation, "
+            f"status, created_at, confirmed_at, executed_at "
+            f"FROM {META_SCHEMA}.mutations"
+        )
+        params: list[Any] = []
+        if mutation_status:
+            sql += " WHERE status = ?"
+            params.append(mutation_status)
+        sql += " ORDER BY created_at DESC"
+
+        rows = db.query(sql, params if params else None)
+
+        if pretty:
+            if not rows:
+                click.echo("No mutations found.")
+                return
+            for row in rows:
+                click.echo(
+                    f"  {row['mutation_id']:20} {row['status']:10} "
+                    f"{row['operation']:8} {row['connector_name']}.{row['table_name']} "
+                    f"(created {row['created_at']})"
+                )
+        else:
+            click.echo(json.dumps(rows, indent=2, default=str))
+
+
+@cli.command("confirm")
+@click.argument("mutation_id")
+def confirm_mutation(mutation_id: str):
+    """Confirm and execute a pending mutation."""
+    from cheeksbase.core.db import CheeksbaseDB
+    from cheeksbase.mutations.engine import MutationEngine
+
+    with CheeksbaseDB() as db:
+        engine = MutationEngine(db)
+        result = engine.confirm(mutation_id)
+        click.echo(json.dumps(result, indent=2, default=str))
+        if result["status"] in ("error", "failed"):
+            sys.exit(1)
+
+
+@cli.command("reject")
+@click.argument("mutation_id")
+def reject_mutation(mutation_id: str):
+    """Reject a pending mutation."""
+    from cheeksbase.core.db import CheeksbaseDB
+    from cheeksbase.core.sync import META_SCHEMA
+
+    with CheeksbaseDB() as db:
+        # Check if mutation exists and is pending
+        rows = db.query(
+            f"SELECT status FROM {META_SCHEMA}.mutations WHERE mutation_id = ?",
+            [mutation_id],
+        )
+        if not rows:
+            click.echo(f"Mutation '{mutation_id}' not found.", err=True)
+            sys.exit(1)
+        if rows[0]["status"] != "pending":
+            click.echo(
+                f"Mutation '{mutation_id}' is not pending "
+                f"(status: {rows[0]['status']}).",
+                err=True,
+            )
+            sys.exit(1)
+
+        db.conn.execute(
+            f"UPDATE {META_SCHEMA}.mutations "
+            f"SET status = 'rejected' WHERE mutation_id = ?",
+            [mutation_id],
+        )
+        click.echo(f"Rejected mutation: {mutation_id}")
+
+
 @cli.command()
 @click.option("--port", default=8000, help="Port to run MCP server on")
 @click.option("--host", default="localhost", help="Host to bind to")
