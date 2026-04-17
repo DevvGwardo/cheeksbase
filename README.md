@@ -69,6 +69,7 @@ I want you to:
 3. Read the README and AGENTS.md to understand the architecture
 4. Help me set up a connector for [YOUR_DATA_SOURCE] (e.g., Stripe, GitHub, Postgres, CSV files)
 5. Show me how to query my data with SQL once it's synced
+6. Show me how to save data back — INSERT/UPDATE/DELETE locally, or use the mutation engine to push changes back to source systems
 
 The key insight: instead of giving you 10 different API tool calls that can't JOIN data, Cheeksbase syncs everything into DuckDB so you can write one SQL query across all my business data.
 
@@ -225,6 +226,131 @@ Cheeksbase exposes an MCP server for AI agents:
 # - sync: Refresh data from sources
 # - annotate: Add semantic annotations
 # - chain: Chain multiple tool calls
+```
+
+---
+
+## 💾 Writing Data — How Your Agent Saves to Cheeksbase
+
+Agents can write data to the database in two ways: **direct SQL** for local analysis
+and **mutations** for pushing changes back to source systems.
+
+### Direct SQL Writes (Local)
+
+Use the `query` tool with INSERT, UPDATE, or DELETE statements. Changes stay in
+DuckDB only — great for annotations, derived tables, and analysis artifacts.
+
+```python
+# Agent: INSERT analysis results into a local table
+query(sql="""
+  INSERT INTO analysis.churn_risk (customer_id, risk_score, reason)
+  SELECT c.id, 0.87, 'declining usage + open tickets'
+  FROM stripe.customers c
+  JOIN zendesk.tickets t ON c.email = t.requester_email
+  WHERE c.last_charge_at < '2026-01-01'
+""")
+
+# Agent: UPDATE local annotations
+query(sql="""
+  UPDATE analysis.churn_risk
+  SET risk_score = 0.95, reason = 'churn confirmed by CS team'
+  WHERE customer_id = 'cus_abc123'
+""")
+
+# Agent: DELETE stale analysis
+query(sql="""
+  DELETE FROM analysis.churn_risk
+  WHERE created_at < CURRENT_DATE - INTERVAL 30 DAY
+""")
+```
+
+### Write-Back Mutations (Push to Source Systems)
+
+The mutation engine lets agents push changes back to connected APIs (Stripe,
+HubSpot, Postgres, etc.) with a **preview → confirm** safety flow.
+
+```python
+# Step 1: Preview — see what will change before committing
+from cheeksbase.core.db import CheeksbaseDB
+from cheeksbase.mutations.engine import MutationEngine
+
+with CheeksbaseDB() as db:
+    engine = MutationEngine(db)
+
+    # Preview the mutation
+    result = engine.handle_sql("""
+      UPDATE stripe.customers
+      SET metadata = json_set(metadata, '$.priority', 'high')
+      WHERE id IN ('cus_abc', 'cus_def')
+    """)
+    # result.status == "pending"
+    # result.mutation_id == "mut_a1b2c3d4e5f6"
+    # result.preview shows affected_rows and sample data
+
+    # Step 2: Confirm — actually push changes to Stripe
+    confirmed = engine.confirm("mut_a1b2c3d4e5f6")
+    # confirmed.status == "executed"
+```
+
+Or from the CLI:
+
+```bash
+# Preview + confirm via CLI
+cheeksbase mutations list              # see pending mutations
+cheeksbase confirm mut_a1b2c3d4e5f6    # execute a pending mutation
+cheeksbase reject  mut_a1b2c3d4e5f6    # discard a pending mutation
+```
+
+### Mutation Guardrails
+
+The engine enforces safety rules automatically:
+
+| Rule | What It Prevents |
+|------|-----------------|
+| **No DROP** | `DROP TABLE` is blocked |
+| **No ALTER** | Schema changes are blocked |
+| **No TRUNCATE** | Mass deletes are blocked |
+| **DELETE requires WHERE** | Must specify which rows to delete |
+| **Preview before confirm** | Every mutation shows affected rows before executing |
+
+### Agent Workflow Example
+
+```python
+# Full agent workflow: query → analyze → save back
+
+# 1. Discover what's available
+list_connectors()
+
+# 2. Inspect the data
+describe(table="stripe.customers")
+
+# 3. Query and analyze
+query(sql="""
+  SELECT email, SUM(amount) as total_spend
+  FROM stripe.charges
+  GROUP BY email
+  HAVING total_spend > 10000
+""")
+
+# 4. Save analysis locally (stays in DuckDB)
+query(sql="""
+  INSERT INTO analysis.big_spenders (email, total_spend, flagged_at)
+  SELECT email, SUM(amount), CURRENT_TIMESTAMP
+  FROM stripe.charges
+  GROUP BY email
+  HAVING SUM(amount) > 10000
+""")
+
+# 5. Push priority changes back to Stripe
+result = engine.handle_sql("""
+  UPDATE stripe.customers
+  SET metadata = json_set(metadata, '$.tier', 'enterprise')
+  WHERE email IN (
+    SELECT email FROM analysis.big_spenders WHERE total_spend > 50000
+  )
+""")
+# Review result.preview, then confirm if looks good
+engine.confirm(result["mutation_id"])
 ```
 
 ---
