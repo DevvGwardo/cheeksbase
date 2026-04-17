@@ -82,16 +82,24 @@ def get_connectors() -> dict[str, Any]:
 
 def add_connector(
     name: str,
-    connector_type: str,
+    source: str,
     credentials: dict[str, str],
+    overrides: dict[str, Any] | None = None,
     sync_interval: str | None = None,
 ) -> None:
-    """Add a connector to the configuration."""
+    """Add a connector to the configuration.
+
+    `source` is the connector registry name (e.g. "csv", "stripe") used to
+    look up the template at sync time. `overrides` are merged onto the
+    template (e.g. `{"path": "/tmp/*.csv", "format": "csv"}`).
+    """
     config = load_config()
     connector_config: dict[str, Any] = {
-        "type": connector_type,
+        "source": source,
         "credentials": credentials,
     }
+    if overrides:
+        connector_config["overrides"] = overrides
     if sync_interval:
         connector_config["sync_interval"] = sync_interval
     config["connectors"][name] = connector_config

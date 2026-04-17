@@ -94,12 +94,12 @@ def test_connectors_config(temp_cheeksbase_dir):
     init_cheeksbase()
 
     # Add a connector
-    add_connector("test_connector", "rest_api", {"api_key": "***"})
+    add_connector("test_connector", "stripe", {"api_key": "***"})
 
     # Get connectors
     connectors = get_connectors()
     assert "test_connector" in connectors
-    assert connectors["test_connector"]["type"] == "rest_api"
+    assert connectors["test_connector"]["source"] == "stripe"
     assert connectors["test_connector"]["credentials"]["api_key"] == "***"
 
 

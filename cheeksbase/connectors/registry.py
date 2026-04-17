@@ -36,6 +36,31 @@ def get_connector_config(connector_name: str) -> dict[str, Any] | None:
     return None
 
 
+def resolve_source_config(connector_entry: dict[str, Any]) -> dict[str, Any]:
+    """Resolve a config.yaml connector entry to a dict ready for SyncEngine.
+
+    Loads the connector template (by `source`), merges `overrides` on top,
+    and attaches `credentials`. The returned dict carries the transport
+    `type` (file / rest_api / database / graphql) from the template.
+    """
+    source = connector_entry.get("source")
+    if not source:
+        raise ValueError(
+            "Connector entry missing 'source' field. "
+            "Re-add the connector with `cheeksbase add`."
+        )
+
+    template = get_connector_config(source)
+    if not template:
+        raise ValueError(f"Unknown connector source: {source!r}")
+
+    resolved: dict[str, Any] = dict(template)
+    overrides = connector_entry.get("overrides") or {}
+    resolved.update(overrides)
+    resolved["credentials"] = connector_entry.get("credentials", {})
+    return resolved
+
+
 def get_available_connectors() -> list[str]:
     """List all available connector types (built-in + user)."""
     names: set[str] = set()
