@@ -1,36 +1,38 @@
 {% extends "base.html" %}
-{% block title %}{{ connector_name }}.{{ table_name }} — Cheeksbase{% endblock %}
+{% block title %}{{ connector_name }}.{{ table_name }} &mdash; cheeksbase{% endblock %}
 {% block breadcrumb %}
   <nav class="breadcrumb">
-    <a href="/">Data sources</a> /
-    <a href="/connectors/{{ connector_name }}">{{ connector_name }}</a> /
+    <a href="/">data sources</a><span class="sep">/</span>
+    <a href="/connectors/{{ connector_name }}">{{ connector_name }}</a><span class="sep">/</span>
     <strong>{{ table_name }}</strong>
   </nav>
 {% endblock %}
 {% block content %}
   <h2>{{ connector_name }}.{{ table_name }}</h2>
   <p class="muted">
-    {{ "{:,}".format(total_rows) }} row{{ "" if total_rows == 1 else "s" }} total &middot;
-    {{ schema.columns | length }} column{{ "" if schema.columns | length == 1 else "s" }} &middot;
-    showing page {{ page }} of {{ total_pages }}
+    {{ "{:,}".format(total_rows) }} row{{ "" if total_rows == 1 else "s" }} total
+    <span class="dim">&middot;</span>
+    {{ schema.columns | length }} column{{ "" if schema.columns | length == 1 else "s" }}
+    <span class="dim">&middot;</span>
+    Page {{ page }} of {{ total_pages }}
   </p>
 
   {% if schema.description %}
-    <p><em>{{ schema.description }}</em></p>
+    <p class="muted"><em>{{ schema.description }}</em></p>
   {% endif %}
 
   {% if not rows %}
-    <div class="empty-state">
-      <p>This table is empty.</p>
+    <div class="pane empty">
+      <p class="muted">This table is empty.</p>
     </div>
   {% else %}
-    <figure>
-      <table class="rows striped">
+    <div class="pane">
+      <table class="rows">
         <thead>
           <tr>
             {% for col in columns %}
               {% set col_meta = (schema.columns | selectattr("name", "equalto", col) | first) %}
-              <th title="{{ col_meta.type if col_meta else '' }}{% if col_meta and col_meta.description %} — {{ col_meta.description }}{% endif %}">
+              <th title="{{ col_meta.type if col_meta else '' }}{% if col_meta and col_meta.description %} &mdash; {{ col_meta.description }}{% endif %}">
                 {{ col }}
                 {% if col_meta %}
                   <br><small class="muted">{{ col_meta.type }}</small>
@@ -44,28 +46,28 @@
             <tr>
               {% for col in columns %}
                 {% set cell = row[col] %}
-                <td title="{{ cell }}">{% if cell is none %}<span class="muted">—</span>{% else %}{{ cell }}{% endif %}</td>
+                <td title="{{ cell }}">{% if cell is none %}<span class="dim">&mdash;</span>{% else %}{{ cell }}{% endif %}</td>
               {% endfor %}
             </tr>
           {% endfor %}
         </tbody>
       </table>
-    </figure>
 
-    <div class="pagination">
-      {% if page > 1 %}
-        <a href="?page={{ page - 1 }}&page_size={{ page_size }}" role="button" class="secondary">&larr; Previous</a>
-      {% else %}
-        <button disabled>&larr; Previous</button>
-      {% endif %}
+      <div class="pagination">
+        {% if page > 1 %}
+          <a href="?page={{ page - 1 }}&page_size={{ page_size }}" class="btn">&larr; prev</a>
+        {% else %}
+          <button class="btn" disabled>&larr; prev</button>
+        {% endif %}
 
-      <span class="muted">Page {{ page }} of {{ total_pages }}</span>
+        {% if page < total_pages %}
+          <a href="?page={{ page + 1 }}&page_size={{ page_size }}" class="btn">next &rarr;</a>
+        {% else %}
+          <button class="btn" disabled>next &rarr;</button>
+        {% endif %}
 
-      {% if page < total_pages %}
-        <a href="?page={{ page + 1 }}&page_size={{ page_size }}" role="button" class="secondary">Next &rarr;</a>
-      {% else %}
-        <button disabled>Next &rarr;</button>
-      {% endif %}
+        <span class="status">Page {{ page }} of {{ total_pages }}</span>
+      </div>
     </div>
   {% endif %}
 {% endblock %}
