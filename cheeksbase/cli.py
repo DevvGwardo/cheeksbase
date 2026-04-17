@@ -52,6 +52,7 @@ def init():
 @click.option("--path", help="Path to files (for file connectors)")
 @click.option("--format", "file_format", help="File format (csv, parquet, json)")
 @click.option("--sync-interval", help="Sync interval (e.g., '1h', '30m')")
+@click.option("--freshness", "freshness_threshold", help="Freshness threshold before showing stale (e.g., '24h', '30m'). Default: 1h")
 def add(
     source_type: str,
     name: str | None,
@@ -63,6 +64,7 @@ def add(
     path: str | None,
     file_format: str | None,
     sync_interval: str | None,
+    freshness_threshold: str | None,
 ):
     """Add a new data connector.
 
@@ -106,7 +108,7 @@ def add(
         overrides["format"] = file_format
 
     # Add connector
-    add_connector(name, source_type, credentials, overrides or None, sync_interval)
+    add_connector(name, source_type, credentials, overrides or None, sync_interval, freshness_threshold)
 
     click.echo(f"Added connector: {name} ({source_type})")
 

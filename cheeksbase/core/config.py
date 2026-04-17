@@ -86,12 +86,14 @@ def add_connector(
     credentials: dict[str, str],
     overrides: dict[str, Any] | None = None,
     sync_interval: str | None = None,
+    freshness_threshold: str | None = None,
 ) -> None:
     """Add a connector to the configuration.
 
     `source` is the connector registry name (e.g. "csv", "stripe") used to
     look up the template at sync time. `overrides` are merged onto the
     template (e.g. `{"path": "/tmp/*.csv", "format": "csv"}`).
+    `freshness_threshold` is a human-readable duration like "24h" or "30m".
     """
     config = load_config()
     connector_config: dict[str, Any] = {
@@ -102,6 +104,8 @@ def add_connector(
         connector_config["overrides"] = overrides
     if sync_interval:
         connector_config["sync_interval"] = sync_interval
+    if freshness_threshold:
+        connector_config["freshness_threshold"] = freshness_threshold
     config["connectors"][name] = connector_config
     save_config(config)
 

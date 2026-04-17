@@ -5,3 +5,4 @@ description: CSV file connector with glob path support and auto-schema detection
 path: ./data/*.csv
 format: csv
 auto_schema: true
+freshness_threshold: 24h

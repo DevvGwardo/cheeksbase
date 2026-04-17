@@ -11,6 +11,23 @@ from typing import Any
 from cheeksbase.core.db import META_SCHEMA, CheeksbaseDB
 
 DEFAULT_QUERY_TIMEOUT_MS = 30_000
+DEFAULT_FRESHNESS_THRESHOLD = 3600  # 1 hour (in seconds)
+
+
+def _parse_duration(s: str) -> int:
+    """Parse a human-readable duration string into seconds.
+
+    Supports: '30s', '5m', '2h', '24h', '7d'.
+    Returns the raw number if just digits (assumed seconds).
+    """
+    s = s.strip().lower()
+    match = re.fullmatch(r"(\d+)\s*([smhd])?", s)
+    if not match:
+        raise ValueError(f"Invalid duration: {s!r}. Use e.g. '30s', '5m', '2h', '24h'.")
+    value = int(match.group(1))
+    unit = match.group(2) or "s"
+    multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    return value * multipliers[unit]
 
 
 class QueryEngine:
@@ -201,7 +218,7 @@ class QueryEngine:
                     total_rows += count
                     table_info.append({"name": table, "rows": count})
 
-            freshness = self.get_freshness(name)
+            freshness = self.get_freshness(name, threshold_override=entry.get("freshness_threshold") if entry else None)
 
             connector_entry: dict[str, Any] = {
                 "name": name,
@@ -324,8 +341,14 @@ class QueryEngine:
 
         return result
 
-    def get_freshness(self, connector_name: str) -> dict[str, Any]:
-        """Return freshness info for a connector."""
+    def get_freshness(self, connector_name: str, threshold_override: str | None = None) -> dict[str, Any]:
+        """Return freshness info for a connector.
+
+        Args:
+            connector_name: Name of the connector.
+            threshold_override: Human-readable duration like "24h", "30m".
+                                Falls back to DEFAULT_FRESHNESS_THRESHOLD if not provided.
+        """
         result = self.db.conn.execute(
             f"SELECT MAX(finished_at) as last_sync FROM {META_SCHEMA}.sync_log "
             "WHERE connector_name = ? AND status = 'success'",
@@ -334,8 +357,8 @@ class QueryEngine:
         row = result.fetchone()
         last_sync = row[0] if row and row[0] else None
 
-        # Default threshold: 1 hour
-        threshold = 3600
+        # Resolve threshold
+        threshold = _parse_duration(threshold_override) if threshold_override else DEFAULT_FRESHNESS_THRESHOLD
 
         # Compute age
         age_seconds = None
