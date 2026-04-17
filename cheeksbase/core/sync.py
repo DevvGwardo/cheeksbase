@@ -258,8 +258,7 @@ class SyncEngine:
 
                     # Convert to DuckDB table
                     df = self._list_to_duckdb(data, resource_name, primary_key)  # noqa: F841
-                    self.db.conn.execute(f'DROP TABLE IF EXISTS "{safe_source}"."{safe_resource}"')
-                    self.db.conn.execute(f'CREATE TABLE "{safe_source}"."{safe_resource}" AS SELECT * FROM df')
+                    self.db.conn.execute(f'CREATE OR REPLACE TABLE "{safe_source}"."{safe_resource}" AS SELECT * FROM df')
 
                     row_count = len(data)
                     total_rows += row_count
@@ -349,10 +348,7 @@ class SyncEngine:
             try:
                 safe_table = _validate_identifier(table_name)
                 self.db.conn.execute(
-                    f'DROP TABLE IF EXISTS "{safe_source}"."{safe_table}"'
-                )
-                self.db.conn.execute(
-                    f'CREATE TABLE "{safe_source}"."{safe_table}" AS '
+                    f'CREATE OR REPLACE TABLE "{safe_source}"."{safe_table}" AS '
                     f'SELECT * FROM {attach_name}."{safe_table}"'
                 )
                 row_count = self.db.conn.execute(
@@ -436,9 +432,8 @@ class SyncEngine:
                     self._log(f"    Unsupported format: {file_format}")
                     continue
 
-                # Create table
-                self.db.conn.execute(f'DROP TABLE IF EXISTS "{safe_source}"."{table_name}"')
-                self.db.conn.execute(f'CREATE TABLE "{safe_source}"."{table_name}" AS SELECT * FROM df')
+                # CREATE OR REPLACE is atomic — if SELECT fails, old table survives
+                self.db.conn.execute(f'CREATE OR REPLACE TABLE "{safe_source}"."{table_name}" AS SELECT * FROM df')
 
                 row_count = len(df)
                 total_rows += row_count
@@ -533,8 +528,7 @@ class SyncEngine:
                     # Convert to DuckDB table
                     primary_key = resource.get("primary_key", "id")
                     df = self._list_to_duckdb(data, resource_name, primary_key)  # noqa: F841
-                    self.db.conn.execute(f'DROP TABLE IF EXISTS "{source_name}"."{resource_name}"')
-                    self.db.conn.execute(f'CREATE TABLE "{source_name}"."{resource_name}" AS SELECT * FROM df')
+                    self.db.conn.execute(f'CREATE OR REPLACE TABLE "{source_name}"."{resource_name}" AS SELECT * FROM df')
 
                     row_count = len(data)
                     total_rows += row_count

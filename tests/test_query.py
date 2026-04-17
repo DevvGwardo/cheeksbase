@@ -447,3 +447,48 @@ class TestSQLRouting:
     def test_attach_blocked(self, engine):
         result = engine.execute("ATTACH ':memory:' AS evil")
         assert "error" in result or result.get("status") in ("rejected", "error")
+
+
+# ---------------------------------------------------------------------------
+# execute() — query timeout
+# ---------------------------------------------------------------------------
+
+class TestQueryTimeout:
+
+    def test_query_timeout(self, engine):
+        """Long-running query should return an error, not hang forever."""
+        # Generate a very large series and group by all — expensive operation
+        result = engine.execute(
+            "SELECT * FROM generate_series(1, 1000000000000) GROUP BY ALL",
+            timeout_ms=500,
+        )
+        assert "error" in result
+        assert "timeout" in result["error"].lower() or "exceeded" in result["error"].lower()
+
+    def test_custom_timeout(self, engine):
+        """Custom timeout_ms parameter should be respected."""
+        # A very short timeout should still cause slow queries to fail
+        result = engine.execute(
+            "SELECT * FROM generate_series(1, 1000000000000) GROUP BY ALL",
+            timeout_ms=100,
+        )
+        assert "error" in result
+
+    def test_timeout_does_not_break_normal_queries(self, engine):
+        """Fast queries should still succeed with timeout enabled."""
+        result = engine.execute("SELECT id, name FROM test_connector.users ORDER BY id")
+        assert "error" not in result
+        assert result["row_count"] == 5
+        assert result["rows"][0]["name"] == "Alice"
+
+    def test_timeout_reset_between_queries(self, engine):
+        """Timeout should be reset after a timed-out query so subsequent queries work."""
+        # First: a query that times out
+        engine.execute(
+            "SELECT * FROM generate_series(1, 1000000000000) GROUP BY ALL",
+            timeout_ms=500,
+        )
+        # Second: a normal query must still work (timeout was reset)
+        result = engine.execute("SELECT 1 as val")
+        assert "error" not in result
+        assert result["rows"][0]["val"] == 1

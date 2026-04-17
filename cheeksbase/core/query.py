@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import re
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Any
 
 from cheeksbase.core.db import META_SCHEMA, CheeksbaseDB
+
+DEFAULT_QUERY_TIMEOUT_MS = 30_000
 
 
 class QueryEngine:
@@ -18,13 +21,14 @@ class QueryEngine:
         self._query_cache: dict[str, Any] = {}
         self._cache_ttl = 300  # 5 minutes default TTL
 
-    def execute(self, sql: str, max_rows: int = 200, use_cache: bool = True) -> dict[str, Any]:
+    def execute(self, sql: str, max_rows: int = 200, use_cache: bool = True, timeout_ms: int | None = None) -> dict[str, Any]:
         """Execute a SQL query and return formatted results.
 
         Args:
             sql: SQL query to execute
             max_rows: Maximum rows to return
             use_cache: Whether to use query result caching
+            timeout_ms: Query timeout in milliseconds (default: 30000)
 
         Returns:
             Dict with columns, rows, data_types, row_count, etc.
@@ -53,14 +57,38 @@ class QueryEngine:
         # Check for stale connectors and refresh if needed
         self._refresh_stale_connectors(sql)
 
-        # Execute query
-        try:
-            conn_result = self.db.conn.execute(sql)
-            columns = [desc[0] for desc in conn_result.description]
-            data_types = {desc[0]: str(desc[1]) for desc in conn_result.description}
-            rows = conn_result.fetchall()
-        except Exception as e:
-            return {"error": str(e)}
+        # Execute query with timeout
+        effective_timeout_s = (timeout_ms or DEFAULT_QUERY_TIMEOUT_MS) / 1000.0
+        result_container: dict[str, Any] = {}
+        error_container: list[Exception] = []
+
+        def _run_query() -> None:
+            try:
+                conn_result = self.db.conn.execute(sql)
+                result_container["columns"] = [desc[0] for desc in conn_result.description]
+                result_container["data_types"] = {desc[0]: str(desc[1]) for desc in conn_result.description}
+                result_container["rows"] = conn_result.fetchall()
+            except Exception as e:
+                error_container.append(e)
+
+        query_thread = threading.Thread(target=_run_query, daemon=True)
+        query_thread.start()
+        query_thread.join(timeout=effective_timeout_s)
+
+        if query_thread.is_alive():
+            # Query exceeded timeout — interrupt and return error
+            try:
+                self.db.conn.interrupt()
+            except Exception:
+                pass
+            return {"error": f"Query exceeded timeout of {int(effective_timeout_s * 1000)}ms"}
+
+        if error_container:
+            return {"error": str(error_container[0])}
+
+        columns = result_container["columns"]
+        data_types = result_container["data_types"]
+        rows = result_container["rows"]
 
         total_rows = len(rows)
         truncated = total_rows > max_rows

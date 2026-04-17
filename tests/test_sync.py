@@ -522,5 +522,67 @@ class TestSyncDispatcher:
         assert _validate_identifier("camelCase") == "camelCase"
 
 
+# ---------------------------------------------------------------------------
+# Atomic table replacement (CREATE OR REPLACE)
+# ---------------------------------------------------------------------------
+
+
+class TestAtomicTableReplace:
+    def test_sync_preserves_data_on_create_failure(self, engine):
+        """When the new CREATE fails, the original table and data survive."""
+        schema = "test_atomic"
+        table = "my_table"
+        engine.db.conn.execute(f'CREATE SCHEMA "{schema}"')
+        engine.db.conn.execute(
+            f'CREATE TABLE "{schema}"."{table}" AS SELECT 1 AS val'
+        )
+
+        # CREATE OR REPLACE with a bad SELECT — should fail but preserve original
+        with pytest.raises(Exception, match="."):  # noqa: B017
+            engine.db.conn.execute(
+                f'CREATE OR REPLACE TABLE "{schema}"."{table}" '
+                f'AS SELECT * FROM nonexistent_table_does_not_exist'
+            )
+
+        # Original data must still be there
+        rows = engine.db.conn.execute(
+            f'SELECT val FROM "{schema}"."{table}"'
+        ).fetchall()
+        assert rows == [(1,)]
+
+    def test_sync_replaces_data_on_success(self, engine):
+        """Successful CREATE OR REPLACE replaces the table."""
+        schema = "test_atomic2"
+        table = "my_table"
+        engine.db.conn.execute(f'CREATE SCHEMA "{schema}"')
+        engine.db.conn.execute(
+            f'CREATE TABLE "{schema}"."{table}" AS SELECT 42 AS val'
+        )
+
+        engine.db.conn.execute(
+            f'CREATE OR REPLACE TABLE "{schema}"."{table}" AS SELECT 99 AS val'
+        )
+
+        rows = engine.db.conn.execute(
+            f'SELECT val FROM "{schema}"."{table}"'
+        ).fetchall()
+        assert rows == [(99,)]
+
+    def test_first_sync_creates_table(self, engine):
+        """When no table exists, CREATE OR REPLACE creates it."""
+        schema = "test_atomic3"
+        table = "brand_new"
+        engine.db.conn.execute(f'CREATE SCHEMA "{schema}"')
+
+        engine.db.conn.execute(
+            f'CREATE OR REPLACE TABLE "{schema}"."{table}" AS SELECT 7 AS val'
+        )
+
+        rows = engine.db.conn.execute(
+            f'SELECT val FROM "{schema}"."{table}"'
+        ).fetchall()
+        assert rows == [(7,)]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

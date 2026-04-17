@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import json
 from typing import Annotated, Any
 
@@ -10,6 +11,28 @@ from pydantic import Field
 
 from cheeksbase.core.db import CheeksbaseDB
 from cheeksbase.core.query import QueryEngine
+
+# Module-level singleton DuckDB connection — shared across all tool calls.
+_db: CheeksbaseDB | None = None
+
+
+def _get_db() -> CheeksbaseDB:
+    """Return a lazily-initialised, process-wide CheeksbaseDB connection."""
+    global _db
+    if _db is None:
+        from cheeksbase.core.db import CheeksbaseDB as _DB
+
+        _db = _DB()
+        atexit.register(_close_db)
+    return _db
+
+
+def _close_db() -> None:
+    """Clean up the singleton connection at interpreter exit."""
+    global _db
+    if _db:
+        _db.close()
+        _db = None
 
 
 def _build_instructions(engine: QueryEngine) -> str:
@@ -71,17 +94,17 @@ def create_server() -> FastMCP:
         max_rows: Annotated[int, Field(description="Maximum rows to return", ge=1, le=10000)] = 200,
     ) -> str:
         """Execute a SQL query against the database. Use `describe` first to understand table columns and data types."""
-        with CheeksbaseDB() as db:
-            eng = QueryEngine(db)
-            result = eng.execute(sql, max_rows=max_rows)
+        db = _get_db()
+        eng = QueryEngine(db)
+        result = eng.execute(sql, max_rows=max_rows)
         return json.dumps(result, indent=2, default=str)
 
     @server.tool()
     def list_connectors() -> str:
         """List all connected data connectors with their tables, row counts, and last sync time."""
-        with CheeksbaseDB() as db:
-            eng = QueryEngine(db)
-            result = eng.list_connectors()
+        db = _get_db()
+        eng = QueryEngine(db)
+        result = eng.list_connectors()
         return json.dumps(result, indent=2, default=str)
 
     @server.tool()
@@ -89,9 +112,9 @@ def create_server() -> FastMCP:
         table: Annotated[str, Field(description="Table to describe, e.g. 'stripe.customers' or 'hubspot.contacts'")],
     ) -> str:
         """Describe a table's columns, types, annotations, and sample rows."""
-        with CheeksbaseDB() as db:
-            eng = QueryEngine(db)
-            result = eng.describe_table(table)
+        db = _get_db()
+        eng = QueryEngine(db)
+        result = eng.describe_table(table)
         return json.dumps(result, indent=2, default=str)
 
     @server.tool()
@@ -108,9 +131,9 @@ def create_server() -> FastMCP:
 
         connector_config = connectors[connector]
 
-        with CheeksbaseDB() as db:
-            sync_engine = SyncEngine(db)
-            result = sync_engine.sync(connector, connector_config)
+        db = _get_db()
+        sync_engine = SyncEngine(db)
+        result = sync_engine.sync(connector, connector_config)
 
         return json.dumps({
             "status": result.status,
@@ -128,30 +151,30 @@ def create_server() -> FastMCP:
         """Annotate a table or column with metadata like descriptions, PII flags, etc."""
         parts = target.split(".")
 
-        with CheeksbaseDB() as db:
-            if len(parts) == 2:
-                schema, table = parts
-                if key == "description":
-                    db.set_table_description(schema, table, value)
-                else:
-                    db.set_metadata(schema, table, key, value, column="")
-                result = {"annotated": target, "key": key, "value": value}
-            elif len(parts) == 3:
-                schema, table, column = parts
-                if key in ("description", "note"):
-                    db.conn.execute(
-                        f"INSERT INTO _cheeksbase.columns "
-                        f"(connector_name, schema_name, table_name, column_name, {key}) "
-                        f"VALUES (?, ?, ?, ?, ?) "
-                        f"ON CONFLICT (connector_name, schema_name, table_name, column_name) "
-                        f"DO UPDATE SET {key} = excluded.{key}",
-                        [schema, schema, table, column, value],
-                    )
-                else:
-                    db.set_metadata(schema, table, key, value, column=column)
-                result = {"annotated": target, "key": key, "value": value}
+        db = _get_db()
+        if len(parts) == 2:
+            schema, table = parts
+            if key == "description":
+                db.set_table_description(schema, table, value)
             else:
-                result = {"error": f"Invalid target '{target}'. Use 'schema.table' or 'schema.table.column'"}
+                db.set_metadata(schema, table, key, value, column="")
+            result = {"annotated": target, "key": key, "value": value}
+        elif len(parts) == 3:
+            schema, table, column = parts
+            if key in ("description", "note"):
+                db.conn.execute(
+                    f"INSERT INTO _cheeksbase.columns "
+                    f"(connector_name, schema_name, table_name, column_name, {key}) "
+                    f"VALUES (?, ?, ?, ?, ?) "
+                    f"ON CONFLICT (connector_name, schema_name, table_name, column_name) "
+                    f"DO UPDATE SET {key} = excluded.{key}",
+                    [schema, schema, table, column, value],
+                )
+            else:
+                db.set_metadata(schema, table, key, value, column=column)
+            result = {"annotated": target, "key": key, "value": value}
+        else:
+            result = {"error": f"Invalid target '{target}'. Use 'schema.table' or 'schema.table.column'"}
 
         return json.dumps(result, indent=2)
 
@@ -169,16 +192,16 @@ def create_server() -> FastMCP:
             if tool_name == "query":
                 sql = args.get("sql", "")
                 max_rows = args.get("max_rows", 200)
-                with CheeksbaseDB() as db:
-                    eng = QueryEngine(db)
-                    result = eng.execute(sql, max_rows=max_rows)
+                db = _get_db()
+                eng = QueryEngine(db)
+                result = eng.execute(sql, max_rows=max_rows)
                 results.append({"tool": tool_name, "result": result})
 
             elif tool_name == "describe":
                 table = args.get("table", "")
-                with CheeksbaseDB() as db:
-                    eng = QueryEngine(db)
-                    result = eng.describe_table(table)
+                db = _get_db()
+                eng = QueryEngine(db)
+                result = eng.describe_table(table)
                 results.append({"tool": tool_name, "result": result})
 
             elif tool_name == "sync":
@@ -188,9 +211,9 @@ def create_server() -> FastMCP:
 
                 connectors = get_connectors()
                 if connector in connectors:
-                    with CheeksbaseDB() as db:
-                        sync_engine = SyncEngine(db)
-                        result = sync_engine.sync(connector, connectors[connector])
+                    db = _get_db()
+                    sync_engine = SyncEngine(db)
+                    result = sync_engine.sync(connector, connectors[connector])
                     results.append({"tool": tool_name, "result": {
                         "status": result.status,
                         "tables_synced": result.tables_synced,
