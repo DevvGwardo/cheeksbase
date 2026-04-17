@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}{{ connector_name }}.{{ table_name }} — Cheeksbase{% endblock %}
+{% block breadcrumb %}
+  <nav class="breadcrumb">
+    <a href="/">Data sources</a> /
+    <a href="/connectors/{{ connector_name }}">{{ connector_name }}</a> /
+    <strong>{{ table_name }}</strong>
+  </nav>
+{% endblock %}
+{% block content %}
+  <h2>{{ connector_name }}.{{ table_name }}</h2>
+  <p class="muted">
+    {{ "{:,}".format(total_rows) }} row{{ "" if total_rows == 1 else "s" }} total &middot;
+    {{ schema.columns | length }} column{{ "" if schema.columns | length == 1 else "s" }} &middot;
+    showing page {{ page }} of {{ total_pages }}
+  </p>
+
+  {% if schema.description %}
+    <p><em>{{ schema.description }}</em></p>
+  {% endif %}
+
+  {% if not rows %}
+    <div class="empty-state">
+      <p>This table is empty.</p>
+    </div>
+  {% else %}
+    <figure>
+      <table class="rows striped">
+        <thead>
+          <tr>
+            {% for col in columns %}
+              {% set col_meta = (schema.columns | selectattr("name", "equalto", col) | first) %}
+              <th title="{{ col_meta.type if col_meta else '' }}{% if col_meta and col_meta.description %} — {{ col_meta.description }}{% endif %}">
+                {{ col }}
+                {% if col_meta %}
+                  <br><small class="muted">{{ col_meta.type }}</small>
+                {% endif %}
+              </th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+            <tr>
+              {% for col in columns %}
+                {% set cell = row[col] %}
+                <td title="{{ cell }}">{% if cell is none %}<span class="muted">—</span>{% else %}{{ cell }}{% endif %}</td>
+              {% endfor %}
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </figure>
+
+    <div class="pagination">
+      {% if page > 1 %}
+        <a href="?page={{ page - 1 }}&page_size={{ page_size }}" role="button" class="secondary">&larr; Previous</a>
+      {% else %}
+        <button disabled>&larr; Previous</button>
+      {% endif %}
+
+      <span class="muted">Page {{ page }} of {{ total_pages }}</span>
+
+      {% if page < total_pages %}
+        <a href="?page={{ page + 1 }}&page_size={{ page_size }}" role="button" class="secondary">Next &rarr;</a>
+      {% else %}
+        <button disabled>Next &rarr;</button>
+      {% endif %}
+    </div>
+  {% endif %}
+{% endblock %}
