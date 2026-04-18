@@ -159,7 +159,7 @@ class QueryEngine:
                 self.db.conn.interrupt()
             except Exception:
                 pass
-            return self._timeout_error(int(effective_timeout_s * 1000))
+            return self._timeout_error(timeout_ms or DEFAULT_QUERY_TIMEOUT_MS)
 
         if error_container:
             return self._query_error(sql, error_container[0])

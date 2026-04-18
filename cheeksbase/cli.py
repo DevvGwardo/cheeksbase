@@ -21,13 +21,13 @@ from cheeksbase.core.config import (
 
 @click.group()
 @click.version_option(version=__version__)
-def cli():
+def cli() -> None:
     """🔨 Cheeksbase — agent-first data platform."""
     pass
 
 
 @cli.command()
-def init():
+def init() -> None:
     """Initialize Cheeksbase (create config directory and database)."""
     ddir = init_cheeksbase()
 
@@ -65,7 +65,7 @@ def add(
     file_format: str | None,
     sync_interval: str | None,
     freshness_threshold: str | None,
-):
+) -> None:
     """Add a new data connector.
 
     Examples:
@@ -148,7 +148,7 @@ def remove(name: str) -> None:
 @click.argument("name", required=False)
 @click.option("--all", "sync_all", is_flag=True, help="Sync all connectors")
 @click.option("--force", is_flag=True, help="Force sync even if not stale")
-def sync(name: str | None, sync_all: bool, force: bool):
+def sync(name: str | None, sync_all: bool, force: bool) -> None:
     """Sync data from connectors.
 
     Examples:
@@ -204,7 +204,7 @@ def sync(name: str | None, sync_all: bool, force: bool):
 @click.option("--max-rows", default=200, help="Maximum rows to return")
 @click.option("--pretty", is_flag=True, help="Pretty print results")
 @click.option("--no-cache", is_flag=True, help="Disable query caching")
-def query(sql: str, max_rows: int, pretty: bool, no_cache: bool):
+def query(sql: str, max_rows: int, pretty: bool, no_cache: bool) -> None:
     """Execute a SQL query.
 
     Examples:
@@ -278,7 +278,7 @@ def connectors(pretty: bool) -> None:
 @click.option("--status", "mutation_status", default=None,
               help="Filter by status (pending, executed, failed)")
 @click.option("--pretty", is_flag=True, help="Pretty print results")
-def mutations_list(mutation_status: str | None, pretty: bool):
+def mutations_list(mutation_status: str | None, pretty: bool) -> None:
     """List mutations."""
     from cheeksbase.core.db import META_SCHEMA, CheeksbaseDB
 

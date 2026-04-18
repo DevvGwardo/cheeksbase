@@ -1,6 +1,8 @@
 """Heuristic detectors for relationships, PII, and descriptions.
 
-Pure functions — no database access, no side effects. The semantic agent
+Core detection functions are pure — no database access, no side effects.
+Some validation helpers (``validate_relationship``, ``detect_pii_in_values``)
+accept a ``CheeksbaseDB`` handle for data-level checks. The semantic agent
 orchestrates these and writes results to metadata tables.
 """
 
