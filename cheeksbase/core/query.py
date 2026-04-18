@@ -74,24 +74,25 @@ class QueryEngine:
 
         # Check persistent DB cache first
         cache_key = f"{hash(sql)}:{max_rows}"
-        try:
-            cached = self.db.get_query_cache(cache_key)
-            if cached:
-                result = {**cached, "_cached": True}
-                if "rows" in result:
-                    result["rows"] = [dict(r) for r in result["rows"]]
-                return result
-        except Exception:
-            pass  # Fall through to query if cache unavailable
+        if use_cache:
+            try:
+                cached = self.db.get_query_cache(cache_key)
+                if cached:
+                    cached_result = {**cached, "_cached": True}
+                    if "rows" in cached_result:
+                        cached_result["rows"] = [dict(r) for r in cached_result["rows"]]
+                    return cached_result
+            except Exception:
+                pass  # Fall through to query if cache unavailable
 
         # Check local in-memory cache as fallback
         if use_cache and cache_key in self._query_cache:
             cached = self._query_cache[cache_key]
             if time.time() - cached["timestamp"] < self._cache_ttl:
-                result = {**cached["result"], "_cached": True}
-                if "rows" in result:
-                    result["rows"] = [dict(r) for r in result["rows"]]
-                return result
+                mem_result = {**cached["result"], "_cached": True}
+                if "rows" in mem_result:
+                    mem_result["rows"] = [dict(r) for r in mem_result["rows"]]
+                return mem_result
 
         # Route mutations to the mutation engine
         first_word = self._get_first_sql_keyword(sql)
@@ -193,7 +194,7 @@ class QueryEngine:
                                 schema=schema,
                                 table=table,
                                 sql=sql,
-                                description=f"Auto-discovered from successful query",
+                                description="Auto-discovered from successful query",
                             )
         except Exception:
             pass
@@ -216,7 +217,10 @@ class QueryEngine:
         return result
 
     def _serialize(self, val: Any) -> Any:
-        """Serialize a value for JSON output."""
+        """Serialize a value for JSON output.
+
+        Handles datetime, bytes, and Decimal types that are not natively JSON-serializable.
+        """
         if val is None:
             return None
         if isinstance(val, (datetime,)):
@@ -316,9 +320,10 @@ class QueryEngine:
         elif len(parts) == 1:
             # Try to find the table in any schema
             table = parts[0]
-            schema = self._find_schema_for_table(table)
-            if schema is None:
+            found_schema = self._find_schema_for_table(table)
+            if found_schema is None:
                 return {"error": f"Table '{table}' not found in any schema"}
+            schema = found_schema
         else:
             return {"error": f"Invalid table reference: '{table_ref}'. Use 'schema.table' format."}
 
@@ -494,8 +499,12 @@ class QueryEngine:
         return None
 
     def clear_cache(self) -> None:
-        """Clear the query cache."""
+        """Clear both the in-memory and persistent query caches."""
         self._query_cache.clear()
+        try:
+            self.db.conn.execute("DELETE FROM _cheeksbase.query_cache")
+        except Exception:
+            pass  # Best-effort: table may not exist
 
     def set_cache_ttl(self, ttl_seconds: int) -> None:
         """Set the cache TTL in seconds."""

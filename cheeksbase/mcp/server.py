@@ -288,11 +288,11 @@ def chain(
             if connector in connectors:
                 db = _get_db()
                 sync_engine = SyncEngine(db)
-                result = sync_engine.sync(connector, connectors[connector])
+                sync_result = sync_engine.sync(connector, connectors[connector])
                 results.append({"tool": tool_name, "result": {
-                    "status": result.status,
-                    "tables_synced": result.tables_synced,
-                    "rows_synced": result.rows_synced,
+                    "status": sync_result.status,
+                    "tables_synced": sync_result.tables_synced,
+                    "rows_synced": sync_result.rows_synced,
                 }})
             else:
                 results.append({"tool": tool_name, "error": f"Connector '{connector}' not found"})
@@ -331,10 +331,12 @@ def create_server() -> FastMCP:
     return server
 
 
-def run_server(host: str = "localhost", port: int = 8000):
+def run_server(host: str = "localhost", port: int = 8000) -> None:
     """Run the MCP server."""
+    import uvicorn
+
     server = create_server()
-    server.run(host=host, port=port)
+    uvicorn.run(server.streamable_http_app, host=host, port=port)
 
 
 if __name__ == "__main__":

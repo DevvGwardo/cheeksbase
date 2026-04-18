@@ -262,17 +262,16 @@ class SyncEngine:
                     ).hexdigest()[:16]
 
                     # Check against last successful sync hash
+                    # (hash stored for future comparison — currently using timestamp-based check)
                     try:
-                        prev_hash_rows = self.db.query(
+                        self.db.query(
                             f"SELECT error_message FROM {META_SCHEMA}.sync_log "
                             "WHERE connector_name = ? AND status = 'success' "
                             "ORDER BY id DESC LIMIT 1",
                             [source_name],
                         )
-                        # We store the hash in a separate tracking — for now use a simple check
-                        # against the last sync timestamp
                     except Exception:
-                        prev_hash_rows = []
+                        pass  # Best-effort: skip if sync log unavailable
 
                     # Always log the hash for future comparison
                     self._log(f"    Data hash: {data_hash}")
@@ -424,9 +423,10 @@ class SyncEngine:
                     f'CREATE OR REPLACE TABLE "{safe_source}"."{safe_table}" AS '
                     f'SELECT * FROM {attach_name}."{safe_table}"'
                 )
-                row_count = self.db.conn.execute(
+                row_count_result = self.db.conn.execute(
                     f'SELECT COUNT(*) FROM "{safe_source}"."{safe_table}"'
-                ).fetchone()[0]
+                ).fetchone()
+                row_count = row_count_result[0] if row_count_result else 0
                 total_rows += row_count
                 tables_synced += 1
                 row_counts[table_name] = row_count
@@ -693,7 +693,7 @@ class SyncEngine:
         else:
             return {}
 
-    def _list_to_duckdb(self, data: list[dict], table_name: str, primary_key: str) -> duckdb.DuckDBPyRelation:
+    def _list_to_duckdb(self, data: list[dict], table_name: str, primary_key: str) -> duckdb.DuckDBPyConnection:
         """Convert a list of dicts to a DuckDB relation using native bulk insert."""
         if not data:
             return self.db.conn.execute(f"SELECT NULL as {primary_key} WHERE 1=0")
@@ -716,13 +716,13 @@ class SyncEngine:
             # Fallback to original row-by-row if pandas fails
             return self._list_to_duckdb_fallback(data, table_name, primary_key)
 
-    def _list_to_duckdb_fallback(self, data: list[dict], table_name: str, primary_key: str) -> duckdb.DuckDBPyRelation:
+    def _list_to_duckdb_fallback(self, data: list[dict], table_name: str, primary_key: str) -> duckdb.DuckDBPyConnection:
         """Fallback: original row-by-row insertion for when pandas is unavailable."""
         if not data:
             return self.db.conn.execute(f"SELECT NULL as {primary_key} WHERE 1=0")
 
         # Get all unique keys from all records
-        all_keys = set()
+        all_keys: set[str] = set()
         for record in data:
             all_keys.update(record.keys())
 

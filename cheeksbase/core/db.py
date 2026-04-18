@@ -193,8 +193,8 @@ class CheeksbaseDB:
             except Exception:
                 pass  # Already exists
 
-    def execute(self, sql: str, params: list | None = None) -> duckdb.DuckDBPyRelation:
-        """Execute a SQL query."""
+    def execute(self, sql: str, params: list | None = None) -> duckdb.DuckDBPyConnection:
+        """Execute a SQL query and return the connection for chaining."""
         if params:
             return self.conn.execute(sql, params)
         return self.conn.execute(sql)
@@ -260,7 +260,10 @@ class CheeksbaseDB:
             f"RETURNING id",
             [connector_name, connector_type],
         )
-        return result.fetchone()[0]
+        row = result.fetchone()
+        if row is None:
+            raise RuntimeError("Sync log INSERT RETURNING returned no row")
+        return row[0]
 
     def log_sync_end(
         self,
@@ -304,17 +307,19 @@ class CheeksbaseDB:
             # Update column metadata if annotations provided
             if annotations and table_name in annotations:
                 table_annotations = annotations[table_name]
-                for col_name, col_annotations in table_annotations.items():
-                    for key, value in col_annotations.items():
-                        if key in ("description", "note"):
-                            self.conn.execute(
-                                f"INSERT INTO {META_SCHEMA}.columns "
-                                f"(connector_name, schema_name, table_name, column_name, {key}) "
-                                f"VALUES (?, ?, ?, ?, ?) "
-                                f"ON CONFLICT (connector_name, schema_name, table_name, column_name) "
-                                f"DO UPDATE SET {key} = excluded.{key}",
-                                [connector_name, schema_name, table_name, col_name, value],
-                            )
+                if isinstance(table_annotations, dict):
+                    for col_name, col_annotations in table_annotations.items():
+                        if isinstance(col_annotations, dict):
+                            for key, value in col_annotations.items():
+                                if key in ("description", "note"):
+                                    self.conn.execute(
+                                        f"INSERT INTO {META_SCHEMA}.columns "
+                                        f"(connector_name, schema_name, table_name, column_name, {key}) "
+                                        f"VALUES (?, ?, ?, ?, ?) "
+                                        f"ON CONFLICT (connector_name, schema_name, table_name, column_name) "
+                                        f"DO UPDATE SET {key} = excluded.{key}",
+                                        [connector_name, schema_name, table_name, col_name, value],
+                                    )
 
     def get_column_annotations(self, schema: str, table: str) -> dict[str, dict[str, str]]:
         """Get annotations for all columns in a table."""
@@ -502,8 +507,8 @@ class CheeksbaseDB:
             self._conn.close()
             self._conn = None
 
-    def __enter__(self):
+    def __enter__(self) -> CheeksbaseDB:
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
         self.close()

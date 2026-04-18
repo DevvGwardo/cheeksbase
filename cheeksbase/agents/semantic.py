@@ -153,7 +153,8 @@ class SemanticAgent:
                 )
                 # Also expose PII through the generic metadata table so agents
                 # querying by key can find it without knowing the `note` format.
-                self.db.set_metadata(schema, table, "pii_type", pii_type, column=col)
+                if pii_type is not None:
+                    self.db.set_metadata(schema, table, "pii_type", pii_type, column=col)
             else:
                 self.db.conn.execute(
                     "INSERT INTO _cheeksbase.columns "
