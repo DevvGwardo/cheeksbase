@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from cheeksbase.core.db import META_SCHEMA, CheeksbaseDB
+from cheeksbase.mutations.preview import _first_word as _extract_first_sql_keyword
 
 # Module-level singleton
 _query_engine_singleton: QueryEngine | None = None
@@ -98,7 +99,7 @@ class QueryEngine:
                 return mem_result
 
         # Route mutations to the mutation engine
-        first_word = self._get_first_sql_keyword(sql)
+        first_word = _extract_first_sql_keyword(sql)
         if first_word in ("UPDATE", "INSERT", "DELETE", "DROP", "ALTER", "TRUNCATE",
                           "CREATE", "GRANT", "REVOKE", "COPY", "ATTACH", "LOAD", "INSTALL"):
             from cheeksbase.mutations.engine import MutationEngine
@@ -186,7 +187,7 @@ class QueryEngine:
         # Auto-discover query templates from successful queries
         try:
             if not error_container and result_rows:
-                first_word = self._get_first_sql_keyword(sql)
+                first_word = _extract_first_sql_keyword(sql)
                 if first_word == "SELECT":
                     tables = re.findall(
                         r'["\']?(\w+)["\']?\s*\.\s*["\']?(\w+)["\']?', sql, re.IGNORECASE
@@ -513,48 +514,6 @@ class QueryEngine:
     def set_cache_ttl(self, ttl_seconds: int) -> None:
         """Set the cache TTL in seconds."""
         self._cache_ttl = ttl_seconds
-
-    @staticmethod
-    def _get_first_sql_keyword(sql: str) -> str:
-        """Extract the first real SQL keyword, stripping comments and handling WITH."""
-        stripped = sql.strip()
-        if not stripped:
-            return ""
-        # Strip leading single-line comments (-- ...) and block comments (/* ... */)
-        cleaned = re.sub(r'--[^\n]*', '', stripped)
-        cleaned = re.sub(r'/\*.*?\*/', '', cleaned, flags=re.DOTALL)
-        cleaned = cleaned.strip()
-        if not cleaned:
-            return ""
-        # Handle WITH ... AS (...) <actual_op> by extracting the operation after CTEs
-        upper = cleaned.upper()
-        if upper.startswith("WITH "):
-            # Scan through the CTE definitions to find where they end.
-            # CTEs are: name AS (...) [, name AS (...)]*
-            # The operation keyword is the first keyword after all CTE definitions
-            # at depth 0 that isn't a comma.
-            depth = 0
-            i = 0
-            n = len(cleaned)
-            while i < n:
-                ch = cleaned[i]
-                if ch == '(':
-                    depth += 1
-                elif ch == ')':
-                    depth -= 1
-                    if depth == 0:
-                        # End of a CTE definition. Check what follows.
-                        after = cleaned[i + 1:].lstrip()
-                        if after and after[0] == ',':
-                            # More CTEs — skip the comma and continue
-                            i += 1  # will be incremented again by the loop
-                        elif after:
-                            # This is the operation keyword
-                            return after.split()[0].upper()
-                i += 1
-            # Fallback: route to mutation engine for further validation
-            return "WITH"
-        return cleaned.split()[0].upper()
 
     def _extract_tables_from_sql(self, sql: str) -> str | None:
         """Extract schema.table references from SQL for query history tracking."""
