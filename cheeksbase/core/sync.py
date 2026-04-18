@@ -14,7 +14,7 @@ from typing import Any
 
 import duckdb
 
-from cheeksbase.core.db import META_SCHEMA, CheeksbaseDB, _validate_identifier
+from cheeksbase.core.db import CheeksbaseDB, _validate_identifier
 
 
 @dataclass
@@ -131,162 +131,50 @@ class SyncEngine:
 
         from cheeksbase.connectors.registry import get_connector_config
 
-        # Load connector config from YAML
         connector_config = get_connector_config(source_name)
         if not connector_config:
             raise ValueError(
                 f"No connector config found for {source_name}. "
-                "Add the connector with `cheeksbase add` or place its YAML config in the connectors directory."
+                "Add the connector with `cheeksbase add` or place its YAML config "
+                "in the connectors directory."
             )
 
         base_url = connector_config.get("base_url", "")
         auth_config = connector_config.get("auth", {})
         resources = connector_config.get("resources", [])
-
-        # Build auth headers
         headers = self._build_auth_headers(auth_config, credentials)
 
         total_rows = 0
         tables_synced = 0
-        row_counts = {}
-        table_names = []
+        row_counts: dict[str, int] = {}
+        table_names: list[str] = []
 
         with httpx.Client(timeout=30.0) as client:
             for resource in resources:
                 resource_name = resource["name"]
                 endpoint = resource.get("endpoint", f"/{resource_name}")
                 primary_key = resource.get("primary_key", "id")
-
                 self._log(f"  Syncing {resource_name}...")
 
-                # Pagination config from resource or connector
                 pagination = resource.get("pagination", config.get("pagination", {}))
-                pag_type = pagination.get("type", "")
-                page_size = pagination.get("page_size", 100)
-                cursor_field = pagination.get("cursor_field", "cursor")
-                next_field = pagination.get("next_field", "next_cursor")
-                data_field = pagination.get("data_field", "data")
-                offset_param = pagination.get("offset_param", "offset")
-                limit_param = pagination.get("limit_param", "limit")
+                url = f"{base_url.rstrip('/')}/{endpoint.lstrip('/')}"
 
                 try:
-                    # Fetch data from API (with pagination if configured)
-                    all_data: list[dict] = []
-                    base_url_fetch = f"{base_url.rstrip('/')}/{endpoint.lstrip('/')}"
-
-                    if pag_type == "cursor":
-                        # Cursor-based pagination
-                        cursor: str | None = None
-                        while True:
-                            params: dict[str, Any] = {limit_param: page_size}
-                            if cursor is not None:
-                                params[cursor_field] = cursor
-                            response = client.get(base_url_fetch, headers=headers, params=params)
-                            response.raise_for_status()
-                            data = response.json()
-                            # Extract data from nested wrapper if needed
-                            if isinstance(data, dict) and data_field in data:
-                                page_data = data[data_field]
-                            elif isinstance(data, list):
-                                page_data = data
-                            else:
-                                page_data = [data] if isinstance(data, dict) else []
-                            if not page_data:
-                                break
-                            all_data.extend(page_data)
-                            # Get next cursor
-                            if isinstance(data, dict) and next_field in data:
-                                cursor = data[next_field]
-                                if not cursor:
-                                    break
-                            else:
-                                break
-                            if len(page_data) < page_size:
-                                break
-                    elif pag_type == "offset":
-                        # Offset/limit pagination
-                        offset = 0
-                        while True:
-                            params = {offset_param: offset, limit_param: page_size}
-                            response = client.get(base_url_fetch, headers=headers, params=params)
-                            response.raise_for_status()
-                            data = response.json()
-                            if isinstance(data, dict) and data_field in data:
-                                page_data = data[data_field]
-                            elif isinstance(data, list):
-                                page_data = data
-                            else:
-                                page_data = [data] if isinstance(data, dict) else []
-                            if not page_data:
-                                break
-                            all_data.extend(page_data)
-                            if len(page_data) < page_size:
-                                break
-                            offset += page_size
-                    else:
-                        # No pagination — single fetch
-                        response = client.get(base_url_fetch, headers=headers)
-                        response.raise_for_status()
-                        data = response.json()
-                        if isinstance(data, dict):
-                            # Some APIs wrap results in a key
-                            if len(data) == 1:
-                                key = next(iter(data))
-                                if isinstance(data[key], list):
-                                    data = data[key]
-                        if not isinstance(data, list):
-                            self._log(f"    Warning: Unexpected response format for {resource_name}")
-                            continue
-                        all_data = data
-
-                    data = all_data
-
-                    if not isinstance(data, list):
-                        self._log(f"    Warning: Unexpected response format for {resource_name}")
-                        continue
-
+                    data = self._fetch_paginated(client, url, headers, pagination)
                     if not data:
                         self._log(f"    No data returned for {resource_name}")
                         continue
 
-                    # M4: Check if data has changed since last sync
                     data_hash = hashlib.sha256(
-                        json.dumps(all_data, sort_keys=True, default=str).encode()
+                        json.dumps(data, sort_keys=True, default=str).encode()
                     ).hexdigest()[:16]
-
-                    # Check against last successful sync hash
-                    # (hash stored for future comparison — currently using timestamp-based check)
-                    try:
-                        self.db.query(
-                            f"SELECT error_message FROM {META_SCHEMA}.sync_log "
-                            "WHERE connector_name = ? AND status = 'success' "
-                            "ORDER BY id DESC LIMIT 1",
-                            [source_name],
-                        )
-                    except Exception:
-                        pass  # Best-effort: skip if sync log unavailable
-
-                    # Always log the hash for future comparison
                     self._log(f"    Data hash: {data_hash}")
 
-                    # Create schema and table
-                    safe_source = _validate_identifier(source_name)
-                    safe_resource = _validate_identifier(resource_name)
-                    self.db.conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{safe_source}"')
-
-                    # Convert to DuckDB table
-                    df = self._list_to_duckdb(data, resource_name, primary_key)  # noqa: F841
-                    self.db.conn.execute(f'CREATE OR REPLACE TABLE "{safe_source}"."{safe_resource}" AS SELECT * FROM df')
-
-                    self._compute_column_stats(source_name, safe_source, safe_resource)
-
-                    row_count = len(data)
+                    row_count = self._store_resource(source_name, resource_name, data, primary_key)
                     total_rows += row_count
                     tables_synced += 1
                     row_counts[resource_name] = row_count
                     table_names.append(resource_name)
-
-                    self._log(f"    Synced {row_count:,} rows")
 
                 except Exception as e:
                     self._log(f"    Error syncing {resource_name}: {e}")
@@ -337,7 +225,7 @@ class SyncEngine:
                 attach_sql += " (READ_ONLY)"
             self.db.conn.execute(attach_sql)
         except Exception as e:
-            self._log(f"  Could not attach remote database: {e}")
+            self._log(f"  Could not attach remote database for {source_name}: {e}")
             return SyncResult(
                 connector_name=source_name,
                 connector_type="database",
@@ -450,7 +338,7 @@ class SyncEngine:
                 elif file_format == "json":
                     df = self.db.conn.execute(f"SELECT * FROM read_json('{safe_fp}')").fetchdf()
                 else:
-                    self._log(f"    Unsupported format: {file_format}")
+                    self._log(f"    Unsupported format '{file_format}'; expected csv, parquet, or json")
                     continue
 
                 # CREATE OR REPLACE is atomic — if SELECT fails, old table survives
@@ -491,37 +379,34 @@ class SyncEngine:
 
         from cheeksbase.connectors.registry import get_connector_config
 
-        # Load connector config from YAML
         connector_config = get_connector_config(source_name)
         if not connector_config:
             raise ValueError(
                 f"No connector config found for {source_name}. "
-                "Add the connector with `cheeksbase add` or place its YAML config in the connectors directory."
+                "Add the connector with `cheeksbase add` or place its YAML config "
+                "in the connectors directory."
             )
 
         endpoint = connector_config.get("endpoint", "")
         auth_config = connector_config.get("auth", {})
         resources = connector_config.get("resources", [])
-
-        # Build auth headers
         headers = self._build_auth_headers(auth_config, credentials)
         headers["Content-Type"] = "application/json"
 
         total_rows = 0
         tables_synced = 0
-        row_counts = {}
-        table_names = []
+        row_counts: dict[str, int] = {}
+        table_names: list[str] = []
 
         with httpx.Client(timeout=30.0) as client:
             for resource in resources:
                 resource_name = resource["name"]
                 query = resource.get("query", "")
                 data_path = resource.get("data_path", "data")
-
+                primary_key = resource.get("primary_key", "id")
                 self._log(f"  Syncing {resource_name}...")
 
                 try:
-                    # Execute GraphQL query
                     response = client.post(
                         endpoint,
                         json={"query": query},
@@ -529,10 +414,8 @@ class SyncEngine:
                     )
                     response.raise_for_status()
 
-                    result = response.json()
-
-                    # Extract data from response
-                    data = result
+                    # Walk the data_path to extract the result list.
+                    data: Any = response.json()
                     for key in data_path.split("."):
                         if isinstance(data, dict) and key in data:
                             data = data[key]
@@ -543,26 +426,15 @@ class SyncEngine:
                     if not isinstance(data, list):
                         self._log(f"    Warning: Unexpected response format for {resource_name}")
                         continue
-
                     if not data:
                         self._log(f"    No data returned for {resource_name}")
                         continue
 
-                    # Create schema and table
-                    self.db.conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{source_name}"')
-
-                    # Convert to DuckDB table
-                    primary_key = resource.get("primary_key", "id")
-                    df = self._list_to_duckdb(data, resource_name, primary_key)  # noqa: F841
-                    self.db.conn.execute(f'CREATE OR REPLACE TABLE "{source_name}"."{resource_name}" AS SELECT * FROM df')
-
-                    row_count = len(data)
+                    row_count = self._store_resource(source_name, resource_name, data, primary_key)
                     total_rows += row_count
                     tables_synced += 1
                     row_counts[resource_name] = row_count
                     table_names.append(resource_name)
-
-                    self._log(f"    Synced {row_count:,} rows")
 
                 except Exception as e:
                     self._log(f"    Error syncing {resource_name}: {e}")
@@ -626,7 +498,115 @@ class SyncEngine:
                 except Exception as e:
                     self._log(f"    Stats error for {col_name}: {e}")
         except Exception as e:
-            self._log(f"    Column stats computation skipped: {e}")
+            self._log(f"    Column stats skipped for {schema_name}.{table_name}: {e}")
+
+    def _fetch_paginated(
+        self,
+        client: Any,
+        url: str,
+        headers: dict[str, str],
+        pagination: dict[str, Any],
+    ) -> list[dict]:
+        """Fetch data from a REST endpoint, handling cursor/offset/no pagination.
+
+        Returns a flat list of record dicts. Empty list if no data.
+        """
+        pag_type = pagination.get("type", "")
+        page_size = pagination.get("page_size", 100)
+        data_field = pagination.get("data_field", "data")
+        cursor_field = pagination.get("cursor_field", "cursor")
+        next_field = pagination.get("next_field", "next_cursor")
+        offset_param = pagination.get("offset_param", "offset")
+        limit_param = pagination.get("limit_param", "limit")
+
+        all_data: list[dict] = []
+
+        if pag_type == "cursor":
+            cursor: str | None = None
+            while True:
+                params: dict[str, Any] = {limit_param: page_size}
+                if cursor is not None:
+                    params[cursor_field] = cursor
+                response = client.get(url, headers=headers, params=params)
+                response.raise_for_status()
+                data = response.json()
+                page_data = self._extract_page_data(data, data_field)
+                if not page_data:
+                    break
+                all_data.extend(page_data)
+                if isinstance(data, dict) and next_field in data:
+                    cursor = data[next_field]
+                    if not cursor:
+                        break
+                else:
+                    break
+                if len(page_data) < page_size:
+                    break
+
+        elif pag_type == "offset":
+            offset = 0
+            while True:
+                params = {offset_param: offset, limit_param: page_size}
+                response = client.get(url, headers=headers, params=params)
+                response.raise_for_status()
+                data = response.json()
+                page_data = self._extract_page_data(data, data_field)
+                if not page_data:
+                    break
+                all_data.extend(page_data)
+                if len(page_data) < page_size:
+                    break
+                offset += page_size
+
+        else:
+            # No pagination — single fetch
+            response = client.get(url, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+            if isinstance(data, dict):
+                if len(data) == 1:
+                    key = next(iter(data))
+                    if isinstance(data[key], list):
+                        data = data[key]
+            if not isinstance(data, list):
+                return []
+            return data
+
+        return all_data
+
+    @staticmethod
+    def _extract_page_data(data: Any, data_field: str) -> list[dict]:
+        """Extract a list of records from an API response, unwrapping nested wrappers."""
+        if isinstance(data, dict) and data_field in data:
+            return data[data_field]
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            return [data]
+        return []
+
+    def _store_resource(
+        self,
+        source_name: str,
+        resource_name: str,
+        data: list[dict],
+        primary_key: str = "id",
+    ) -> int:
+        """Create/update a DuckDB table for a synced resource. Returns row count."""
+        safe_source = _validate_identifier(source_name)
+        safe_resource = _validate_identifier(resource_name)
+        self.db.conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{safe_source}"')
+
+        df = self._list_to_duckdb(data, resource_name, primary_key)  # noqa: F841
+        self.db.conn.execute(
+            f'CREATE OR REPLACE TABLE "{safe_source}"."{safe_resource}" '
+            f"AS SELECT * FROM df"
+        )
+        self._compute_column_stats(source_name, safe_source, safe_resource)
+
+        row_count = len(data)
+        self._log(f"    Synced {row_count:,} rows")
+        return row_count
 
     def _build_auth_headers(self, auth_config: dict[str, Any], credentials: dict[str, str]) -> dict[str, str]:
         """Build authentication headers."""

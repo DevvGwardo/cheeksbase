@@ -105,7 +105,15 @@ def _write_back_to_source(
     # Resource lookup: match connector resource by table name.
     resources = connector.get("resources") or connector.get("config", {}).get("resources", [])
     resource = next((r for r in resources if r.get("name") == parsed["table"]), None)
-    endpoint = resource.get("endpoint", "") if resource else ""
+    if resource is None:
+        return {
+            "ok": False,
+            "error": (
+                f"No resource definition found for table '{parsed['table']}' "
+                f"in connector config. Write-back requires a matching resource entry."
+            ),
+        }
+    endpoint = resource.get("endpoint", "")
     url = base_url.rstrip("/") + endpoint
 
     # Build auth headers.
