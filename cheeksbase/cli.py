@@ -133,7 +133,7 @@ def add(
 
 @cli.command()
 @click.argument("name")
-def remove(name: str):
+def remove(name: str) -> None:
     """Remove a data connector."""
     connectors = get_connectors()
     if name not in connectors:
@@ -232,7 +232,7 @@ def query(sql: str, max_rows: int, pretty: bool, no_cache: bool):
 @cli.command()
 @click.argument("table")
 @click.option("--pretty", is_flag=True, help="Pretty print results")
-def describe(table: str, pretty: bool):
+def describe(table: str, pretty: bool) -> None:
     """Describe a table's schema and metadata.
 
     Examples:
@@ -259,7 +259,7 @@ def describe(table: str, pretty: bool):
 
 @cli.command()
 @click.option("--pretty", is_flag=True, help="Pretty print results")
-def connectors(pretty: bool):
+def connectors(pretty: bool) -> None:
     """List all configured connectors."""
     from cheeksbase.core.db import CheeksbaseDB
     from cheeksbase.core.query import QueryEngine
