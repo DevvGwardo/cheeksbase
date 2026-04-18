@@ -14,14 +14,17 @@ DB_FILE = "cheeksbase.duckdb"
 
 
 def get_cheeksbase_dir() -> Path:
+    """Get the cheeksbase data directory, configurable via CHEEKSBASE_DIR env var."""
     return Path(os.environ.get("CHEEKSBASE_DIR", DEFAULT_DIR))
 
 
 def get_config_path() -> Path:
+    """Get the path to the main config.yaml file."""
     return get_cheeksbase_dir() / CONFIG_FILE
 
 
-def get_db_path() -> Path | str:
+def get_db_path() -> Path:
+    """Get the path to the DuckDB database file."""
     return get_cheeksbase_dir() / DB_FILE
 
 
