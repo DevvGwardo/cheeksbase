@@ -27,6 +27,7 @@ def execute_mutation(
     Returns:
         Dict with keys: rows_affected, local_applied, source_applied,
         source_error (optional).
+
     """
     result: dict[str, Any] = {
         "rows_affected": 0,

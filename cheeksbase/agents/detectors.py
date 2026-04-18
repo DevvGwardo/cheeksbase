@@ -17,6 +17,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class Relationship:
     """A detected foreign-key relationship between two columns."""
+
     from_table: str
     from_column: str
     to_table: str
@@ -84,6 +85,7 @@ def detect_relationships(
         A list of `Relationship` records. Self-references (a table's FK
         pointing back at itself) are included only when the column name is
         clearly distinct from the table's own primary key.
+
     """
     tables = set(columns.keys())
     relationships: list[Relationship] = []

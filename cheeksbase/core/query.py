@@ -30,6 +30,7 @@ def reset_query_engine() -> None:
         _query_engine_singleton.db.close()
     _query_engine_singleton = None
 
+
 DEFAULT_QUERY_TIMEOUT_MS = 30_000
 DEFAULT_FRESHNESS_THRESHOLD = 3600  # 1 hour (in seconds)
 
@@ -53,7 +54,8 @@ def _parse_duration(s: str) -> int:
 class QueryEngine:
     """Execute SQL queries with caching and freshness checks."""
 
-    def __init__(self, db: CheeksbaseDB):
+    def __init__(self, db: CheeksbaseDB) -> None:
+        """Create a QueryEngine backed by the given database connection."""
         self.db = db
         self._query_cache: dict[str, Any] = {}
         self._cache_ttl = 300  # 5 minutes default TTL
@@ -69,6 +71,7 @@ class QueryEngine:
 
         Returns:
             Dict with columns, rows, data_types, row_count, etc.
+
         """
         start_time = time.monotonic()
 
@@ -418,6 +421,7 @@ class QueryEngine:
             connector_name: Name of the connector.
             threshold_override: Human-readable duration like "24h", "30m".
                                 Falls back to DEFAULT_FRESHNESS_THRESHOLD if not provided.
+
         """
         result = self.db.conn.execute(
             f"SELECT MAX(finished_at) as last_sync FROM {META_SCHEMA}.sync_log "

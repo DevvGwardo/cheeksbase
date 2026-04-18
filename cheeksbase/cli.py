@@ -72,6 +72,7 @@ def add(
       cheeksbase add stripe --api-key sk_test_...
       cheeksbase add postgres --connection-string postgresql://...
       cheeksbase add csv_data --path ./data/*.csv --format csv
+
     """
     # Import here to avoid circular imports
     from cheeksbase.connectors.registry import get_available_connectors
@@ -154,6 +155,7 @@ def sync(name: str | None, sync_all: bool, force: bool):
       cheeksbase sync stripe          # sync stripe connector
       cheeksbase sync --all           # sync all connectors
       cheeksbase sync stripe --force  # force sync even if fresh
+
     """
     from cheeksbase.connectors.registry import resolve_source_config
     from cheeksbase.core.db import CheeksbaseDB
@@ -208,6 +210,7 @@ def query(sql: str, max_rows: int, pretty: bool, no_cache: bool):
     Examples:
       cheeksbase query "SELECT * FROM stripe.customers LIMIT 10"
       cheeksbase query "SELECT COUNT(*) FROM hubspot.contacts" --pretty
+
     """
     from cheeksbase.core.db import CheeksbaseDB
     from cheeksbase.core.query import QueryEngine
@@ -235,6 +238,7 @@ def describe(table: str, pretty: bool):
     Examples:
       cheeksbase describe stripe.customers
       cheeksbase describe customers --pretty
+
     """
     from cheeksbase.core.db import CheeksbaseDB
     from cheeksbase.core.query import QueryEngine

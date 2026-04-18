@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -160,7 +161,12 @@ _META_TABLES = ["sync_log", "tables", "columns", "live_rows", "mutations", "rela
 class CheeksbaseDB:
     """DuckDB wrapper with metadata management."""
 
-    def __init__(self, db_path: Path | str | None = None):
+    def __init__(self, db_path: Path | str | None = None) -> None:
+        """Open a Cheeksbase DuckDB database.
+
+        If *db_path* is omitted, the default path from config is used.
+        The connection is created lazily on first access.
+        """
         self.db_path = str(db_path or get_db_path())
         self._conn: duckdb.DuckDBPyConnection | None = None
 
@@ -427,13 +433,11 @@ class CheeksbaseDB:
             [cache_key],
         )
         if rows:
-            import json
             return json.loads(rows[0]["result_json"])
         return None
 
     def set_query_cache(self, cache_key: str, sql: str, max_rows: int, result: dict, ttl_seconds: int = 300) -> None:
         """Cache a query result with TTL."""
-        import json
         self.conn.execute(
             "INSERT INTO _cheeksbase.query_cache "
             "(cache_key, sql_text, max_rows, result_json, created_at, expires_at) "
@@ -508,7 +512,9 @@ class CheeksbaseDB:
             self._conn = None
 
     def __enter__(self) -> CheeksbaseDB:
+        """Enter the context manager."""
         return self
 
     def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
+        """Exit the context manager and close the connection."""
         self.close()

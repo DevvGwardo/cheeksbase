@@ -33,6 +33,7 @@ from cheeksbase.core.db import CheeksbaseDB
 @dataclass
 class AnnotationResult:
     """Summary of what a single ``annotate_connector`` call produced."""
+
     connector_name: str
     tables_annotated: int = 0
     columns_annotated: int = 0
@@ -40,6 +41,7 @@ class AnnotationResult:
     relationships: list[Relationship] = field(default_factory=list)
 
     def summary(self) -> str:
+        """Return a human-readable summary of the annotation results."""
         return (
             f"Annotated {self.tables_annotated} tables, "
             f"{self.columns_annotated} columns, "
@@ -51,7 +53,12 @@ class AnnotationResult:
 class SemanticAgent:
     """Heuristic annotator for freshly synced connector data."""
 
-    def __init__(self, db: CheeksbaseDB | None = None):
+    def __init__(self, db: CheeksbaseDB | None = None) -> None:
+        """Create a new SemanticAgent.
+
+        If *db* is omitted, a fresh ``CheeksbaseDB`` instance is created
+        and will be closed when ``close()`` or ``__exit__`` is called.
+        """
         self._owns_db = db is None
         self.db = db or CheeksbaseDB()
 
@@ -103,9 +110,11 @@ class SemanticAgent:
             self.db.close()
 
     def __enter__(self) -> SemanticAgent:
+        """Enter the context manager."""
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
+        """Exit the context manager and close the DB if owned."""
         self.close()
 
     # ---- internals ------------------------------------------------------

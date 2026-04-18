@@ -25,7 +25,8 @@ class MutationEngine:
     across sessions.
     """
 
-    def __init__(self, db: CheeksbaseDB):
+    def __init__(self, db: CheeksbaseDB) -> None:
+        """Create a MutationEngine backed by the given database connection."""
         self.db = db
 
     # --- Public API --------------------------------------------------------

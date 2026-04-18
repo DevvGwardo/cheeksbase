@@ -14,23 +14,13 @@ from typing import Any
 
 import duckdb
 
-from cheeksbase.core.db import CheeksbaseDB
-
-
-def _validate_identifier(name: str) -> str:
-    """Validate and return a SQL identifier (schema/table/column).
-
-    Only allows [a-zA-Z_][a-zA-Z0-9_]* to prevent SQL injection.
-    Raises ValueError if the identifier contains unsafe characters.
-    """
-    if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', name):
-        raise ValueError(f"Invalid SQL identifier: {name!r}")
-    return name
+from cheeksbase.core.db import META_SCHEMA, CheeksbaseDB, _validate_identifier
 
 
 @dataclass
 class SyncResult:
     """Result of a sync operation."""
+
     connector_name: str
     connector_type: str
     tables_synced: int
@@ -41,14 +31,11 @@ class SyncResult:
     table_names: list[str] = field(default_factory=list)
 
 
-# Metadata schema constant
-META_SCHEMA = "cheeksbase_metadata"
-
-
 class SyncEngine:
     """Syncs data from sources into DuckDB."""
 
-    def __init__(self, db: CheeksbaseDB):
+    def __init__(self, db: CheeksbaseDB) -> None:
+        """Create a SyncEngine backed by the given database connection."""
         self.db = db
         self._sync_t0: float | None = None
 
