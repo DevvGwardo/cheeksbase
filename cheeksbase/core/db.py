@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -199,13 +200,13 @@ class CheeksbaseDB:
             except duckdb.CatalogException:
                 pass  # Column already exists (older DuckDB without IF NOT EXISTS)
 
-    def execute(self, sql: str, params: list | None = None) -> duckdb.DuckDBPyConnection:
+    def execute(self, sql: str, params: Sequence[Any] | None = None) -> duckdb.DuckDBPyConnection:
         """Execute a SQL query and return the connection for chaining."""
         if params:
             return self.conn.execute(sql, params)
         return self.conn.execute(sql)
 
-    def query(self, sql: str, params: list | None = None) -> list[dict[str, Any]]:
+    def query(self, sql: str, params: Sequence[Any] | None = None) -> list[dict[str, Any]]:
         """Execute a query and return results as a list of dicts."""
         if params:
             result = self.conn.execute(sql, params)
@@ -425,7 +426,7 @@ class CheeksbaseDB:
             [connector_name],
         )
 
-    def get_query_cache(self, cache_key: str) -> dict | None:
+    def get_query_cache(self, cache_key: str) -> dict[str, Any] | None:
         """Get a cached query result by key."""
         rows = self.query(
             "SELECT result_json, expires_at FROM _cheeksbase.query_cache "
@@ -436,7 +437,14 @@ class CheeksbaseDB:
             return json.loads(rows[0]["result_json"])
         return None
 
-    def set_query_cache(self, cache_key: str, sql: str, max_rows: int, result: dict, ttl_seconds: int = 300) -> None:
+    def set_query_cache(
+        self,
+        cache_key: str,
+        sql: str,
+        max_rows: int,
+        result: dict[str, Any],
+        ttl_seconds: int = 300,
+    ) -> None:
         """Cache a query result with TTL."""
         self.conn.execute(
             "INSERT INTO _cheeksbase.query_cache "
@@ -472,7 +480,7 @@ class CheeksbaseDB:
             [schema, table, sql, description],
         )
 
-    def get_query_templates(self, schema: str, table: str, limit: int = 5) -> list[dict]:
+    def get_query_templates(self, schema: str, table: str, limit: int = 5) -> list[dict[str, Any]]:
         """Get top query templates for a table."""
         return self.query(
             "SELECT query_sql, description, times_used, success_rate "

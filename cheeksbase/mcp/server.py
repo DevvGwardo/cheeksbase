@@ -15,7 +15,6 @@ from cheeksbase.core.query import QueryEngine, get_query_engine
 
 # Module-level singleton DuckDB connection — shared across all tool calls.
 _db: CheeksbaseDB | None = None
-_server_instructions: str = ""
 
 
 def _get_db() -> CheeksbaseDB:
@@ -39,11 +38,9 @@ def _close_db() -> None:
 
 def _refresh_instructions() -> str:
     """Regenerate server instructions from current database state."""
-    global _server_instructions
     with CheeksbaseDB() as db:
         engine = QueryEngine(db)
-        _server_instructions = _build_instructions(engine)
-    return _server_instructions
+        return _build_instructions(engine)
 
 
 def _build_instructions(engine: QueryEngine) -> str:
@@ -84,6 +81,62 @@ def _build_instructions(engine: QueryEngine) -> str:
     lines.append("4. Use `sync` to re-sync stale connectors before querying")
 
     return "\n".join(lines)
+
+
+def _connector_not_found_response(connector: str, available: list[str]) -> str:
+    """Build a consistent error for missing connectors."""
+    if available:
+        available_text = ", ".join(sorted(available))
+        error = (
+            f"Connector '{connector}' not found. "
+            f"Available connectors: {available_text}."
+        )
+    else:
+        error = (
+            f"Connector '{connector}' not found. "
+            "No connectors are configured yet."
+        )
+    return json.dumps({"error": error}, indent=2)
+
+
+def _dispatch_chain_call(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
+    """Execute a supported chain tool call and return the structured result."""
+    if tool_name == "query":
+        sql = args.get("sql", "")
+        max_rows = args.get("max_rows", 200)
+        eng = get_query_engine()
+        return {"tool": tool_name, "result": eng.execute(sql, max_rows=max_rows)}
+
+    if tool_name == "describe":
+        table = args.get("table", "")
+        eng = get_query_engine()
+        return {"tool": tool_name, "result": eng.describe_table(table)}
+
+    if tool_name == "sync":
+        connector = args.get("connector", "")
+        from cheeksbase.core.config import get_connectors
+        from cheeksbase.core.sync import SyncEngine
+
+        connectors = get_connectors()
+        if connector not in connectors:
+            return json.loads(_connector_not_found_response(connector, list(connectors.keys()))) | {
+                "tool": tool_name
+            }
+
+        db = _get_db()
+        sync_engine = SyncEngine(db)
+        sync_result = sync_engine.sync(connector, connectors[connector])
+        return {
+            "tool": tool_name,
+            "result": {
+                "status": sync_result.status,
+                "tables_synced": sync_result.tables_synced,
+                "rows_synced": sync_result.rows_synced,
+                "error": sync_result.error,
+            },
+        }
+
+    return {"tool": tool_name, "error": f"Unknown tool: {tool_name}"}
 
 
 # Module-level tool functions (defined before create_server to allow imports)
@@ -156,7 +209,7 @@ def explain_query(
 
         # Validate table references exist
         refs = re.findall(r'["\']?(\w+)["\']?\s*\.\s*["\']?(\w+)["\']?', sql, re.IGNORECASE)
-        missing = []
+        missing: list[str] = []
         for schema, table in refs:
             if schema == "_cheeksbase" or schema == "information_schema":
                 continue
@@ -168,7 +221,7 @@ def explain_query(
                 missing.append(f"{schema}.{table}")
 
         # Build response
-        response = {
+        response: dict[str, Any] = {
             "status": "ok",
             "execution_plan": plan,
             "tables_referenced": [f"{s}.{t}" for s, t in refs],
@@ -201,7 +254,7 @@ def sync(
 
     connectors = get_connectors()
     if connector not in connectors:
-        return json.dumps({"error": f"Connector '{connector}' not found"})
+        return _connector_not_found_response(connector, list(connectors.keys()))
 
     connector_config = connectors[connector]
 
@@ -260,45 +313,13 @@ def chain(
     calls: Annotated[list[dict[str, Any]], Field(description="List of tool calls to execute in sequence. Each call should have 'tool' and 'args' keys.")],
 ) -> str:
     """Chain multiple tool calls together. Execute them in sequence and return all results."""
-    results = []
+    results: list[dict[str, Any]] = []
 
     for call in calls:
-        tool_name = call.get("tool", "")
-        args = call.get("args", {})
-
-        if tool_name == "query":
-            sql = args.get("sql", "")
-            max_rows = args.get("max_rows", 200)
-            eng = get_query_engine()
-            result = eng.execute(sql, max_rows=max_rows)
-            results.append({"tool": tool_name, "result": result})
-
-        elif tool_name == "describe":
-            table = args.get("table", "")
-            eng = get_query_engine()
-            result = eng.describe_table(table)
-            results.append({"tool": tool_name, "result": result})
-
-        elif tool_name == "sync":
-            connector = args.get("connector", "")
-            from cheeksbase.core.config import get_connectors
-            from cheeksbase.core.sync import SyncEngine
-
-            connectors = get_connectors()
-            if connector in connectors:
-                db = _get_db()
-                sync_engine = SyncEngine(db)
-                sync_result = sync_engine.sync(connector, connectors[connector])
-                results.append({"tool": tool_name, "result": {
-                    "status": sync_result.status,
-                    "tables_synced": sync_result.tables_synced,
-                    "rows_synced": sync_result.rows_synced,
-                }})
-            else:
-                results.append({"tool": tool_name, "error": f"Connector '{connector}' not found"})
-
-        else:
-            results.append({"tool": tool_name, "error": f"Unknown tool: {tool_name}"})
+        tool_name = str(call.get("tool", ""))
+        raw_args = call.get("args", {})
+        args = raw_args if isinstance(raw_args, dict) else {}
+        results.append(_dispatch_chain_call(tool_name, args))
 
     return json.dumps(results, indent=2, default=str)
 

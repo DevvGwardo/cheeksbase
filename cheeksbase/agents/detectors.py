@@ -9,6 +9,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from cheeksbase.core.db import CheeksbaseDB
+
 # ---------------------------------------------------------------------------
 # Relationships
 # ---------------------------------------------------------------------------
@@ -248,7 +250,7 @@ def generate_column_description(column_name: str, pii_type: str | None = None) -
 
 
 def validate_relationship(
-    db,  # CheeksbaseDB instance
+    db: CheeksbaseDB,
     schema: str,
     rel: Relationship,
 ) -> dict[str, float]:
@@ -298,7 +300,7 @@ _PII_VALUE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 
 
 def detect_pii_in_values(
-    db,  # CheeksbaseDB instance
+    db: CheeksbaseDB,
     schema: str,
     table: str,
     columns: list[str],

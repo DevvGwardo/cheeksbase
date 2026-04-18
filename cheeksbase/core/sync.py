@@ -72,7 +72,10 @@ class SyncEngine:
             elif source_type == "graphql":
                 result = self._sync_graphql(source_name, credentials, source_config)
             else:
-                raise ValueError(f"Unknown source type: {source_type}")
+                raise ValueError(
+                    "Unknown source type: "
+                    f"{source_type}. Expected one of: rest_api, database, file, graphql."
+                )
 
             # Update metadata
             if result.table_names:
@@ -131,7 +134,10 @@ class SyncEngine:
         # Load connector config from YAML
         connector_config = get_connector_config(source_name)
         if not connector_config:
-            raise ValueError(f"No connector config found for {source_name}")
+            raise ValueError(
+                f"No connector config found for {source_name}. "
+                "Add the connector with `cheeksbase add` or place its YAML config in the connectors directory."
+            )
 
         base_url = connector_config.get("base_url", "")
         auth_config = connector_config.get("auth", {})
@@ -488,7 +494,10 @@ class SyncEngine:
         # Load connector config from YAML
         connector_config = get_connector_config(source_name)
         if not connector_config:
-            raise ValueError(f"No connector config found for {source_name}")
+            raise ValueError(
+                f"No connector config found for {source_name}. "
+                "Add the connector with `cheeksbase add` or place its YAML config in the connectors directory."
+            )
 
         endpoint = connector_config.get("endpoint", "")
         auth_config = connector_config.get("auth", {})

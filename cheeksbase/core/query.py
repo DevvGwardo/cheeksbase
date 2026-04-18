@@ -13,6 +13,10 @@ from cheeksbase.mutations.preview import _first_word as _extract_first_sql_keywo
 
 # Module-level singleton
 _query_engine_singleton: QueryEngine | None = None
+_TABLE_REF_PATTERN = re.compile(
+    r'["\']?(\w+)["\']?\s*\.\s*["\']?(\w+)["\']?',
+    re.IGNORECASE,
+)
 
 
 def get_query_engine(db: CheeksbaseDB | None = None) -> QueryEngine:
@@ -61,6 +65,28 @@ class QueryEngine:
         self._query_cache: dict[str, Any] = {}
         self._cache_ttl = 300  # 5 minutes default TTL
 
+    def _clone_cached_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Return a defensive copy of cached result rows."""
+        return [dict(row) for row in rows]
+
+    def _extract_table_refs(self, sql: str) -> list[tuple[str, str]]:
+        """Return schema.table references found in SQL text."""
+        return _TABLE_REF_PATTERN.findall(sql)
+
+    def _timeout_error(self, timeout_ms: int) -> dict[str, str]:
+        """Build a consistent timeout error payload."""
+        return {
+            "error": (
+                f"Query exceeded timeout of {timeout_ms}ms. "
+                "Try adding LIMIT/OFFSET or a narrower WHERE clause, then retry."
+            )
+        }
+
+    def _query_error(self, sql: str, error: Exception) -> dict[str, str]:
+        """Build a consistent query error payload with SQL context."""
+        first_word = _extract_first_sql_keyword(sql) or "QUERY"
+        return {"error": f"{first_word} failed: {error}"}
+
     def execute(self, sql: str, max_rows: int = 200, use_cache: bool = True, timeout_ms: int | None = None) -> dict[str, Any]:
         """Execute a SQL query and return formatted results.
 
@@ -84,7 +110,7 @@ class QueryEngine:
                 if cached:
                     cached_result = {**cached, "_cached": True}
                     if "rows" in cached_result:
-                        cached_result["rows"] = [dict(r) for r in cached_result["rows"]]
+                        cached_result["rows"] = self._clone_cached_rows(cached_result["rows"])
                     return cached_result
             except Exception:
                 pass  # Fall through to query if cache unavailable
@@ -95,7 +121,7 @@ class QueryEngine:
             if time.time() - cached["timestamp"] < self._cache_ttl:
                 mem_result = {**cached["result"], "_cached": True}
                 if "rows" in mem_result:
-                    mem_result["rows"] = [dict(r) for r in mem_result["rows"]]
+                    mem_result["rows"] = self._clone_cached_rows(mem_result["rows"])
                 return mem_result
 
         # Route mutations to the mutation engine
@@ -133,10 +159,10 @@ class QueryEngine:
                 self.db.conn.interrupt()
             except Exception:
                 pass
-            return {"error": f"Query exceeded timeout of {int(effective_timeout_s * 1000)}ms"}
+            return self._timeout_error(int(effective_timeout_s * 1000))
 
         if error_container:
-            return {"error": str(error_container[0])}
+            return self._query_error(sql, error_container[0])
 
         columns = result_container["columns"]
         data_types = result_container["data_types"]
@@ -189,9 +215,7 @@ class QueryEngine:
             if not error_container and result_rows:
                 first_word = _extract_first_sql_keyword(sql)
                 if first_word == "SELECT":
-                    tables = re.findall(
-                        r'["\']?(\w+)["\']?\s*\.\s*["\']?(\w+)["\']?', sql, re.IGNORECASE
-                    )
+                    tables = self._extract_table_refs(sql)
                     for schema, table in tables:
                         if schema != "_cheeksbase" and schema != "information_schema":
                             self.db.add_query_template(
@@ -212,7 +236,7 @@ class QueryEngine:
             # Also cache locally for fast access
             cached_result = dict(result)
             if "rows" in cached_result:
-                cached_result["rows"] = [dict(r) for r in cached_result["rows"]]
+                cached_result["rows"] = self._clone_cached_rows(cached_result["rows"])
             self._query_cache[cache_key] = {
                 "result": cached_result,
                 "timestamp": time.time(),
@@ -239,9 +263,7 @@ class QueryEngine:
     def _refresh_stale_connectors(self, sql: str) -> None:
         """Refresh stale connectors referenced in the query."""
         # Extract schema.table references from SQL
-        refs = re.findall(
-            r'\"?(\w+)\"?\s*\.\s*\"?(\w+)\"?', sql, re.IGNORECASE
-        )
+        refs = self._extract_table_refs(sql)
         for schema, _table in refs:
             # Skip metadata tables
             if schema == META_SCHEMA:
@@ -517,9 +539,7 @@ class QueryEngine:
 
     def _extract_tables_from_sql(self, sql: str) -> str | None:
         """Extract schema.table references from SQL for query history tracking."""
-        refs = re.findall(
-            r'["\']?(\w+)["\']?\s*\.\s*["\']?(\w+)["\']?', sql, re.IGNORECASE
-        )
+        refs = self._extract_table_refs(sql)
         if refs:
             return ", ".join(f"{s}.{t}" for s, t in refs)
         return None
