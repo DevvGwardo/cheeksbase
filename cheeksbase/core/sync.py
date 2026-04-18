@@ -4,17 +4,23 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import duckdb
 
 from cheeksbase.core.db import CheeksbaseDB, _validate_identifier
+
+if TYPE_CHECKING:
+    import httpx
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -311,8 +317,8 @@ class SyncEngine:
 
         total_rows = 0
         tables_synced = 0
-        row_counts = {}
-        table_names = []
+        row_counts: dict[str, int] = {}
+        table_names: list[str] = []
 
         safe_source = _validate_identifier(source_name)
         self.db.conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{safe_source}"')
@@ -502,7 +508,7 @@ class SyncEngine:
 
     def _fetch_paginated(
         self,
-        client: Any,
+        client: httpx.Client,
         url: str,
         headers: dict[str, str],
         pagination: dict[str, Any],

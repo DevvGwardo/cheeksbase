@@ -19,6 +19,7 @@ Designed to be called after a successful sync:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from types import TracebackType
 
 from cheeksbase.agents.detectors import (
     Relationship,
@@ -113,7 +114,12 @@ class SemanticAgent:
         """Enter the context manager."""
         return self
 
-    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         """Exit the context manager and close the DB if owned."""
         self.close()
 

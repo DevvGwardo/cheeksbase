@@ -6,6 +6,7 @@ import json
 import re
 from collections.abc import Sequence
 from pathlib import Path
+from types import TracebackType
 from typing import Any
 
 import duckdb
@@ -523,6 +524,11 @@ class CheeksbaseDB:
         """Enter the context manager."""
         return self
 
-    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         """Exit the context manager and close the connection."""
         self.close()
