@@ -210,7 +210,7 @@ class SyncEngine:
             # Detach if already attached from a previous sync
             self.db.conn.execute(f"DETACH DATABASE IF EXISTS {attach_name}")
         except Exception:
-            pass
+            self._log(f"  DETACH {attach_name} failed (may not exist yet)")
 
         self._log(f"  Attaching remote database for {source_name}")
 
@@ -276,7 +276,7 @@ class SyncEngine:
         try:
             self.db.conn.execute(f"DETACH DATABASE {attach_name}")
         except Exception:
-            pass
+            self._log(f"  DETACH {attach_name} failed during cleanup")
 
         return SyncResult(
             connector_name=source_name,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import atexit
 import json
+import logging
 import re
 from typing import Annotated, Any
 
@@ -12,6 +13,8 @@ from pydantic import Field
 
 from cheeksbase.core.db import CheeksbaseDB
 from cheeksbase.core.query import QueryEngine, get_query_engine
+
+logger = logging.getLogger(__name__)
 
 # Module-level singleton DuckDB connection — shared across all tool calls.
 _db: CheeksbaseDB | None = None
@@ -218,6 +221,7 @@ def explain_query(
                 if table not in tables:
                     missing.append(f"{schema}.{table}")
             except Exception:
+                logger.debug("Failed to check table %s.%s", schema, table, exc_info=True)
                 missing.append(f"{schema}.{table}")
 
         # Build response

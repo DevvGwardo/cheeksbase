@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import threading
 import time
@@ -10,6 +11,8 @@ from typing import Any
 
 from cheeksbase.core.db import META_SCHEMA, CheeksbaseDB
 from cheeksbase.mutations.preview import _first_word as _extract_first_sql_keyword
+
+logger = logging.getLogger(__name__)
 
 # Module-level singleton
 _query_engine_singleton: QueryEngine | None = None
@@ -113,7 +116,7 @@ class QueryEngine:
                         cached_result["rows"] = self._clone_cached_rows(cached_result["rows"])
                     return cached_result
             except Exception:
-                pass  # Fall through to query if cache unavailable
+                logger.debug("Cache read failed, falling through to query", exc_info=True)
 
         # Check local in-memory cache as fallback
         if use_cache and cache_key in self._query_cache:
@@ -208,7 +211,7 @@ class QueryEngine:
                 duration_ms=round((time.monotonic() - start_time) * 1000),
             )
         except Exception:
-            pass  # Best-effort history
+            logger.debug("Failed to record query history", exc_info=True)
 
         # Auto-discover query templates from successful queries
         try:
@@ -225,14 +228,13 @@ class QueryEngine:
                                 description="Auto-discovered from successful query",
                             )
         except Exception:
-            pass
-
+            logger.debug("Failed to auto-discover query templates", exc_info=True)
         # Cache the result in persistent DB
         if use_cache:
             try:
                 self.db.set_query_cache(cache_key, sql, max_rows, result, ttl_seconds=self._cache_ttl)
             except Exception:
-                pass  # Best-effort caching
+                logger.debug("Failed to write query cache", exc_info=True)
             # Also cache locally for fast access
             cached_result = dict(result)
             if "rows" in cached_result:
@@ -280,7 +282,7 @@ class QueryEngine:
                         sync_engine = SyncEngine(self.db)
                         sync_engine.sync(schema, connectors[schema])
                     except Exception:
-                        pass  # Best-effort refresh
+                        logger.debug("Failed to refresh stale connector %s", schema, exc_info=True)
 
     def list_connectors(self) -> dict[str, Any]:
         """List all connected data connectors with their tables and stats.

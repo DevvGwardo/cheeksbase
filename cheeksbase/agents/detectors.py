@@ -8,10 +8,13 @@ orchestrates these and writes results to metadata tables.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 
 from cheeksbase.core.db import CheeksbaseDB
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Relationships
@@ -288,6 +291,7 @@ def validate_relationship(
 
         return {"orphan_rate": orphan_rate, "fk_coverage": fk_coverage}
     except Exception:
+        logger.debug("Failed to validate relationship %s", rel, exc_info=True)
         return {"orphan_rate": float("nan"), "fk_coverage": float("nan")}
 
 
@@ -339,6 +343,6 @@ def detect_pii_in_values(
                     result[col] = pii_type
                     break
     except Exception:
-        pass
+        logger.debug("Failed to detect PII in values", exc_info=True)
 
     return result

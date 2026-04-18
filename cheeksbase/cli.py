@@ -312,7 +312,7 @@ def mutations_list(mutation_status: str | None, pretty: bool) -> None:
 
 @cli.command("confirm")
 @click.argument("mutation_id")
-def confirm_mutation(mutation_id: str):
+def confirm_mutation(mutation_id: str) -> None:
     """Confirm and execute a pending mutation."""
     from cheeksbase.core.db import CheeksbaseDB
     from cheeksbase.mutations.engine import MutationEngine
@@ -327,7 +327,7 @@ def confirm_mutation(mutation_id: str):
 
 @cli.command("reject")
 @click.argument("mutation_id")
-def reject_mutation(mutation_id: str):
+def reject_mutation(mutation_id: str) -> None:
     """Reject a pending mutation."""
     from cheeksbase.core.db import META_SCHEMA, CheeksbaseDB
 
@@ -359,7 +359,7 @@ def reject_mutation(mutation_id: str):
 @cli.command()
 @click.option("--port", default=8000, help="Port to run MCP server on")
 @click.option("--host", default="localhost", help="Host to bind to")
-def serve(port: int, host: str):
+def serve(port: int, host: str) -> None:
     """Start the MCP server for AI agents."""
     from cheeksbase.mcp.server import run_server
 
@@ -370,7 +370,7 @@ def serve(port: int, host: str):
 @cli.command("serve-web")
 @click.option("--port", default=8765, help="Port to run web UI on")
 @click.option("--host", default="127.0.0.1", help="Host to bind to")
-def serve_web(port: int, host: str):
+def serve_web(port: int, host: str) -> None:
     """Start the web UI for browsing your data."""
     try:
         import uvicorn
@@ -393,7 +393,7 @@ def serve_web(port: int, host: str):
 
 @cli.command()
 @click.option("--available", is_flag=True, help="Show available connector types")
-def sources(available: bool):
+def sources(available: bool) -> None:
     """List data sources."""
     from cheeksbase.connectors.registry import get_available_connectors, get_connector_info
 

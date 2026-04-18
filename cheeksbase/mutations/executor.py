@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from cheeksbase.core.db import CheeksbaseDB
 from cheeksbase.mutations.preview import parse_target
+
+logger = logging.getLogger(__name__)
 
 
 def execute_mutation(
@@ -47,6 +50,7 @@ def execute_mutation(
             if fetched and isinstance(fetched[0], int):
                 rows_affected = fetched[0]
         except Exception:
+            logger.debug("Could not fetch row count from mutation result", exc_info=True)
             rows_affected = None
         result["rows_affected"] = rows_affected if rows_affected is not None else 0
         result["local_applied"] = True
