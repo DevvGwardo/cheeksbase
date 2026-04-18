@@ -272,52 +272,7 @@ class SyncEngine:
                     df = self._list_to_duckdb(data, resource_name, primary_key)  # noqa: F841
                     self.db.conn.execute(f'CREATE OR REPLACE TABLE "{safe_source}"."{safe_resource}" AS SELECT * FROM df')
 
-                    # Q2: Compute column statistics for agent-first metadata
-                    try:
-                        col_names = [c[0] for c in self.db.conn.execute(
-                            f'SELECT * FROM "{safe_source}"."{safe_resource}" LIMIT 1'
-                        ).description]
-
-                        for col_name in col_names:
-                            try:
-                                stat_result = self.db.conn.execute(f"""
-                                    SELECT
-                                        1.0 * (COUNT(*) - COUNT("{col_name}")) / NULLIF(COUNT(*), 0) as null_rate,
-                                        COUNT(DISTINCT "{col_name}") as distinct_count
-                                    FROM "{safe_source}"."{safe_resource}"
-                                """).fetchone()
-
-                                if stat_result:
-                                    null_rate = float(stat_result[0]) if stat_result[0] is not None else None
-                                    distinct_count = int(stat_result[1]) if stat_result[1] is not None else None
-
-                                    # Sample top-5 values for categorical columns
-                                    sample_vals = None
-                                    if distinct_count is not None and distinct_count <= 100:
-                                        top_vals = self.db.conn.execute(f"""
-                                            SELECT "{col_name}", COUNT(*) as cnt
-                                            FROM "{safe_source}"."{safe_resource}"
-                                            GROUP BY "{col_name}"
-                                            ORDER BY cnt DESC
-                                            LIMIT 5
-                                        """).fetchall()
-                                        sample_vals = json.dumps([
-                                            {"value": str(v[0]), "count": int(v[1])} for v in top_vals
-                                        ])
-
-                                    self.db.store_column_stats(
-                                        connector_name=source_name,
-                                        schema_name=source_name,
-                                        table_name=resource_name,
-                                        column_name=col_name,
-                                        null_rate=null_rate,
-                                        distinct_count=distinct_count,
-                                        sample_values=sample_vals,
-                                    )
-                            except Exception as e:
-                                self._log(f"    Stats error for {col_name}: {e}")
-                    except Exception as e:
-                        self._log(f"    Column stats computation skipped: {e}")
+                    self._compute_column_stats(source_name, safe_source, safe_resource)
 
                     row_count = len(data)
                     total_rows += row_count
@@ -495,52 +450,7 @@ class SyncEngine:
                 # CREATE OR REPLACE is atomic — if SELECT fails, old table survives
                 self.db.conn.execute(f'CREATE OR REPLACE TABLE "{safe_source}"."{table_name}" AS SELECT * FROM df')
 
-                # Q2: Compute column statistics for agent-first metadata
-                try:
-                    col_names = [c[0] for c in self.db.conn.execute(
-                        f'SELECT * FROM "{safe_source}"."{table_name}" LIMIT 1'
-                    ).description]
-
-                    for col_name in col_names:
-                        try:
-                            stat_result = self.db.conn.execute(f"""
-                                SELECT
-                                    1.0 * (COUNT(*) - COUNT("{col_name}")) / NULLIF(COUNT(*), 0) as null_rate,
-                                    COUNT(DISTINCT "{col_name}") as distinct_count
-                                FROM "{safe_source}"."{table_name}"
-                            """).fetchone()
-
-                            if stat_result:
-                                null_rate = float(stat_result[0]) if stat_result[0] is not None else None
-                                distinct_count = int(stat_result[1]) if stat_result[1] is not None else None
-
-                                # Sample top-5 values for categorical columns
-                                sample_vals = None
-                                if distinct_count is not None and distinct_count <= 100:
-                                    top_vals = self.db.conn.execute(f"""
-                                        SELECT "{col_name}", COUNT(*) as cnt
-                                        FROM "{safe_source}"."{table_name}"
-                                        GROUP BY "{col_name}"
-                                        ORDER BY cnt DESC
-                                        LIMIT 5
-                                    """).fetchall()
-                                    sample_vals = json.dumps([
-                                        {"value": str(v[0]), "count": int(v[1])} for v in top_vals
-                                    ])
-
-                                self.db.store_column_stats(
-                                    connector_name=source_name,
-                                    schema_name=source_name,
-                                    table_name=table_name,
-                                    column_name=col_name,
-                                    null_rate=null_rate,
-                                    distinct_count=distinct_count,
-                                    sample_values=sample_vals,
-                                )
-                        except Exception as e:
-                            self._log(f"    Stats error for {col_name}: {e}")
-                except Exception as e:
-                    self._log(f"    Column stats computation skipped: {e}")
+                self._compute_column_stats(source_name, safe_source, table_name)
 
                 row_count = len(df)
                 total_rows += row_count
@@ -658,6 +568,56 @@ class SyncEngine:
             row_counts=row_counts,
             table_names=table_names,
         )
+
+    def _compute_column_stats(
+        self, source_name: str, schema_name: str, table_name: str,
+    ) -> None:
+        """Compute and store column statistics (null_rate, distinct_count, sample_values)."""
+        try:
+            col_names = [c[0] for c in self.db.conn.execute(
+                f'SELECT * FROM "{schema_name}"."{table_name}" LIMIT 1'
+            ).description]
+
+            for col_name in col_names:
+                try:
+                    stat_result = self.db.conn.execute(f"""
+                        SELECT
+                            1.0 * (COUNT(*) - COUNT("{col_name}")) / NULLIF(COUNT(*), 0) as null_rate,
+                            COUNT(DISTINCT "{col_name}") as distinct_count
+                        FROM "{schema_name}"."{table_name}"
+                    """).fetchone()
+
+                    if stat_result:
+                        null_rate = float(stat_result[0]) if stat_result[0] is not None else None
+                        distinct_count = int(stat_result[1]) if stat_result[1] is not None else None
+
+                        # Sample top-5 values for categorical columns
+                        sample_vals = None
+                        if distinct_count is not None and distinct_count <= 100:
+                            top_vals = self.db.conn.execute(f"""
+                                SELECT "{col_name}", COUNT(*) as cnt
+                                FROM "{schema_name}"."{table_name}"
+                                GROUP BY "{col_name}"
+                                ORDER BY cnt DESC
+                                LIMIT 5
+                            """).fetchall()
+                            sample_vals = json.dumps([
+                                {"value": str(v[0]), "count": int(v[1])} for v in top_vals
+                            ])
+
+                        self.db.store_column_stats(
+                            connector_name=source_name,
+                            schema_name=schema_name,
+                            table_name=table_name,
+                            column_name=col_name,
+                            null_rate=null_rate,
+                            distinct_count=distinct_count,
+                            sample_values=sample_vals,
+                        )
+                except Exception as e:
+                    self._log(f"    Stats error for {col_name}: {e}")
+        except Exception as e:
+            self._log(f"    Column stats computation skipped: {e}")
 
     def _build_auth_headers(self, auth_config: dict[str, Any], credentials: dict[str, str]) -> dict[str, str]:
         """Build authentication headers."""
