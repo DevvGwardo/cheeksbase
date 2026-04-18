@@ -153,16 +153,14 @@ class MutationEngine:
         )
 
     def _load_pending(self, mutation_id: str) -> dict[str, Any] | None:
-        result = self.db.conn.execute(
+        rows = self.db.query(
             f"SELECT mutation_id, connector_name, table_name, operation, "
             f"sql_text, preview, status "
             f"FROM {META_SCHEMA}.mutations "
             f"WHERE mutation_id = ?",
             [mutation_id],
         )
-        cols = [d[0] for d in result.description]
-        row = result.fetchone()
-        return dict(zip(cols, row)) if row else None
+        return rows[0] if rows else None
 
     def _mark_confirmed(self, mutation_id: str) -> None:
         self.db.conn.execute(

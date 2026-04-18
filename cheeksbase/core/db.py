@@ -196,8 +196,8 @@ class CheeksbaseDB:
         ]:
             try:
                 self.conn.execute(col_sql)
-            except Exception:
-                pass  # Already exists
+            except duckdb.CatalogException:
+                pass  # Column already exists (older DuckDB without IF NOT EXISTS)
 
     def execute(self, sql: str, params: list | None = None) -> duckdb.DuckDBPyConnection:
         """Execute a SQL query and return the connection for chaining."""
