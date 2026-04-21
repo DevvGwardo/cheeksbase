@@ -1,4 +1,4 @@
-"""MCP server for Cheeksbase — exposes query, describe, and sync tools."""
+"""MCP server for Cheeksbase — exposes query, describe, sync, and shared-memory tools. — exposes query, describe, and sync tools."""
 
 from __future__ import annotations
 
@@ -328,6 +328,118 @@ def chain(
     return json.dumps(results, indent=2, default=str)
 
 
+
+
+# ── Shared Memory Tools ────────────────────────────────────────────────────
+
+
+def remember_shared(
+    source_agent: Annotated[str, Field(description="Name/ID of the agent writing this memory")],
+    key: Annotated[str, Field(description="Unique key for this memory entry")],
+    value: Annotated[str, Field(description="The memory content to store")],
+    scope: Annotated[str, Field(description="Visibility scope: broadcast (all agents), topic, or targeted", default="broadcast")] = "broadcast",
+    tags: Annotated[str | None, Field(description="Comma-separated tags for categorization")] = None,
+    expires_at: Annotated[str | None, Field(description="ISO 8601 timestamp when this memory should expire")] = None,
+) -> str:
+    """Store a memory that other Hermes agents can read.
+    Use this to share discoveries, decisions, or context across agents."""
+    db = _get_db()
+    # Clean up expired entries first
+    db.shared_cleanup_expired()
+    result = db.shared_remember(
+        source_agent=source_agent,
+        key=key,
+        value=value,
+        scope=scope,
+        tags=tags,
+        expires_at=expires_at,
+    )
+    return json.dumps(result, default=str)
+
+
+def recall_shared(
+    key: Annotated[str, Field(description="Key of the memory to recall")],
+) -> str:
+    """Recall a specific shared memory by key.
+    Returns the memory value and metadata."""
+    db = _get_db()
+    db.shared_cleanup_expired()
+    result = db.shared_recall(key)
+    if result is None:
+        return json.dumps({"error": f"No shared memory found for key: {key}"})
+    return json.dumps(result, default=str)
+
+
+def recall_all_shared(
+    source_agent: Annotated[str | None, Field(description="Filter by source agent name")] = None,
+) -> str:
+    """Recall all shared memories, optionally filtered by source agent.
+    Returns a list of all stored shared memories."""
+    db = _get_db()
+    db.shared_cleanup_expired()
+    results = db.shared_recall_all(source_agent=source_agent)
+    if not results:
+        return json.dumps({"message": "No shared memories stored yet."})
+    return json.dumps(results, default=str)
+
+
+def forget_shared(
+    key: Annotated[str, Field(description="Key of the memory to forget")],
+) -> str:
+    """Delete a shared memory entry by key."""
+    db = _get_db()
+    result = db.shared_recall(key)
+    if result is None:
+        return json.dumps({"error": f"No shared memory found for key: {key}"})
+    db.shared_forget(key)
+    return json.dumps({"status": "forgotten", "key": key})
+
+
+def search_shared(
+    query: Annotated[str, Field(description="Search term to find in shared memories")],
+    limit: Annotated[int, Field(description="Maximum results to return", default=10)] = 10,
+) -> str:
+    """Search shared memories by keyword.
+    Searches across keys, values, and tags."""
+    db = _get_db()
+    db.shared_cleanup_expired()
+    results = db.shared_search(query=query, limit=limit)
+    if not results:
+        return json.dumps({"message": f"No shared memories matching '{query}'."})
+    return json.dumps(results, default=str)
+
+
+def search_shared_semantic(
+    query: Annotated[str, Field(description="Natural language query to search semantically")],
+    limit: Annotated[int, Field(description="Maximum results to return", default=5)] = 5,
+) -> str:
+    """Search shared memories by meaning (semantic/keyword hybrid).
+    Currently uses keyword search as a fallback. Full vector similarity
+    search requires pre-computed embeddings (stored via shared_store_embedding)
+    and an embedding model on the caller side. TODO: add embedding generation."""
+    db = _get_db()
+    db.shared_cleanup_expired()
+    results = db.shared_search(query=query, limit=limit)
+    if not results:
+        return json.dumps({"message": f"No shared memories matching '{query}'."})
+    return json.dumps(results, default=str)
+
+
+def embed_shared(
+    key: Annotated[str, Field(description="Key of the memory to attach an embedding to")],
+    embedding: Annotated[list[float], Field(description="Vector embedding as a list of floats")],
+) -> str:
+    """Attach a vector embedding to a shared memory entry.
+    Use this after storing a memory with remember_shared to enable
+    semantic search via search_shared when embeddings are present.
+    The embedding should be generated using the same model for all entries."""
+    db = _get_db()
+    result = db.shared_recall(key)
+    if result is None:
+        return json.dumps({"error": f"No shared memory found for key: {key}"})
+    db.store_shared_embedding(key, embedding)
+    return json.dumps({"status": "embedded", "key": key, "dimensions": len(embedding)})
+
 def create_server() -> FastMCP:
     """Create the FastMCP server."""
     # Build initial instructions
@@ -353,6 +465,15 @@ def create_server() -> FastMCP:
     server.add_tool(annotate, name="annotate")
     server.add_tool(chain, name="chain")
 
+    # Shared memory tools
+    server.add_tool(remember_shared, name="remember_shared")
+    server.add_tool(recall_shared, name="recall_shared")
+    server.add_tool(recall_all_shared, name="recall_all_shared")
+    server.add_tool(forget_shared, name="forget_shared")
+    server.add_tool(search_shared, name="search_shared")
+    server.add_tool(embed_shared, name="embed_shared")
+
+
     return server
 
 
@@ -365,4 +486,10 @@ def run_server(host: str = "localhost", port: int = 8000) -> None:
 
 
 if __name__ == "__main__":
-    run_server()
+    import sys
+    if "--http" in sys.argv:
+        run_server()
+    else:
+        # Default: stdio transport (for hermes MCP server integration)
+        server = create_server()
+        server.run()

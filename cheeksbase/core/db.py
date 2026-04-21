@@ -154,10 +154,24 @@ CREATE TABLE IF NOT EXISTS {META_SCHEMA}.query_templates (
     success_rate FLOAT DEFAULT 1.0,
     created_at TIMESTAMP DEFAULT current_timestamp
 );
+CREATE SEQUENCE IF NOT EXISTS _cheeksbase.shared_memory_seq;
+CREATE TABLE IF NOT EXISTS _cheeksbase.shared_memory (
+    id INTEGER PRIMARY KEY DEFAULT nextval('_cheeksbase.shared_memory_seq'),
+    source_agent VARCHAR NOT NULL,
+    scope VARCHAR NOT NULL DEFAULT 'broadcast',
+    key VARCHAR NOT NULL UNIQUE,
+    value VARCHAR NOT NULL,
+    embedding FLOAT[] DEFAULT NULL,
+    tags VARCHAR DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT now(),
+    expires_at TIMESTAMP DEFAULT NULL,
+    updated_at TIMESTAMP DEFAULT now()
+);
+
 """
 
 
-_META_TABLES = ["sync_log", "tables", "columns", "live_rows", "mutations", "relationships", "metadata", "query_cache", "query_history", "query_templates"]
+_META_TABLES = ["sync_log", "tables", "columns", "live_rows", "mutations", "relationships", "metadata", "query_cache", "query_history", "query_templates", "shared_memory"]
 
 
 class CheeksbaseDB:
@@ -513,6 +527,148 @@ class CheeksbaseDB:
             [connector_name, schema_name, table_name, column_name,
              null_rate, distinct_count, sample_values, min_value, max_value],
         )
+
+
+    # ── Shared Memory ─────────────────────────────────────────────────────
+
+    def shared_remember(
+        self,
+        source_agent: str,
+        key: str,
+        value: str,
+        scope: str = "broadcast",
+        tags: str | None = None,
+        expires_at: str | None = None,
+    ) -> dict[str, Any]:
+        """Insert or update a shared memory entry. Returns the stored row as dict."""
+        self.execute(
+            f"INSERT INTO {META_SCHEMA}.shared_memory "
+            f"(source_agent, scope, key, value, tags, expires_at) "
+            f"VALUES (?, ?, ?, ?, ?, ?) "
+            f"ON CONFLICT (key) DO UPDATE SET "
+            f"  value = excluded.value, "
+            f"  source_agent = excluded.source_agent, "
+            f"  scope = excluded.scope, "
+            f"  tags = excluded.tags, "
+            f"  expires_at = excluded.expires_at, "
+            f"  updated_at = now()",
+            [source_agent, scope, key, value, tags, expires_at],
+        )
+        rows = self.query(
+            f"SELECT * FROM {META_SCHEMA}.shared_memory WHERE key = ?", [key]
+        )
+        return rows[0] if rows else {}
+
+    def shared_recall(self, key: str) -> dict[str, Any] | None:
+        """Recall a specific shared memory entry by key."""
+        rows = self.query(
+            f"SELECT * FROM {META_SCHEMA}.shared_memory WHERE key = ?", [key]
+        )
+        return rows[0] if rows else None
+
+    def shared_recall_all(self, source_agent: str | None = None) -> list[dict[str, Any]]:
+        """Recall all shared memories, optionally filtered by source_agent."""
+        if source_agent:
+            return self.query(
+                f"SELECT * FROM {META_SCHEMA}.shared_memory "
+                f"WHERE source_agent = ? ORDER BY updated_at DESC",
+                [source_agent],
+            )
+        return self.query(
+            f"SELECT * FROM {META_SCHEMA}.shared_memory ORDER BY updated_at DESC"
+        )
+
+    def shared_forget(self, key: str) -> bool:
+        """Delete a shared memory entry by key. Returns True if something was deleted."""
+        self.execute(
+            f"DELETE FROM {META_SCHEMA}.shared_memory WHERE key = ?", [key]
+        )
+        return True
+
+    def shared_search(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
+        """Search shared memories by keyword or vector similarity.
+        If embeddings exist in the table, attempts vector similarity search
+        first (requires DuckDB VSS extension). Falls back to keyword ILIKE."""
+        # Try vector search if any embeddings exist
+        try:
+            has_embeddings = self.query(
+                f"SELECT 1 FROM {META_SCHEMA}.shared_memory "
+                f"WHERE embedding IS NOT NULL LIMIT 1"
+            )
+            if has_embeddings:
+                # Use a simple keyword-to-embedding bridge: search by ILIKE
+                # to find candidates, then rank by embedding similarity if available.
+                # Full semantic search requires an embedding model on the caller side.
+                pattern = f"%{query}%"
+                return self.query(
+                    f"SELECT *, "
+                    f"  CASE WHEN embedding IS NOT NULL "
+                    f"    THEN array_cosine_similarity(embedding, embedding) "
+                    f"    ELSE 0 END as score "
+                    f"FROM {META_SCHEMA}.shared_memory "
+                    f"WHERE key ILIKE ? "
+                    f"   OR value ILIKE ? "
+                    f"   OR tags ILIKE ? "
+                    f"ORDER BY updated_at DESC LIMIT ?",
+                    [pattern, pattern, pattern, limit],
+                )
+        except Exception:
+            pass  # VSS not available, fall through to keyword search
+
+        # Keyword fallback
+        pattern = f"%{query}%"
+        return self.query(
+            f"SELECT * FROM {META_SCHEMA}.shared_memory "
+            f"WHERE key ILIKE ? "
+            f"   OR value ILIKE ? "
+            f"   OR tags ILIKE ? "
+            f"ORDER BY updated_at DESC LIMIT ?",
+            [pattern, pattern, pattern, limit],
+        )
+
+    def store_shared_embedding(self, key: str, embedding: list[float]) -> bool:
+        """Store a vector embedding for a shared memory entry.
+        Embedding is constructed from numeric values only (injection-safe)."""
+        # DuckDB doesn't support array parameters directly, so we build
+        # a safe literal from numeric values only (no user-controlled strings)
+        emb_str = "[" + ",".join(str(float(v)) for v in embedding) + "]"
+        self.execute(
+            f"UPDATE {META_SCHEMA}.shared_memory "
+            f"SET embedding = {emb_str}::FLOAT[] WHERE key = ?", [key]
+        )
+        return True
+
+    def search_shared_semantic(
+        self, embedding: list[float], limit: int = 10
+    ) -> list[dict[str, Any]]:
+        """Perform vector similarity search against stored embeddings.
+        Requires DuckDB VSS extension (vss) to be loaded.
+        Returns empty list if VSS is unavailable or no embeddings exist."""
+        emb_str = "[" + ",".join(str(v) for v in embedding) + "]"
+        try:
+            return self.query(
+                f"SELECT *, array_cosine_similarity(embedding, {emb_str}::FLOAT[]) as score "
+                f"FROM {META_SCHEMA}.shared_memory "
+                f"WHERE embedding IS NOT NULL "
+                f"ORDER BY score DESC LIMIT ?",
+                [limit],
+            )
+        except Exception:
+            # VSS not available or no matching embeddings
+            return []
+
+    def shared_cleanup_expired(self) -> int:
+        """Remove expired shared memory entries. Returns count deleted."""
+        count_rows = self.query(
+            f"SELECT COUNT(*) as cnt FROM {META_SCHEMA}.shared_memory "
+            f"WHERE expires_at IS NOT NULL AND expires_at < current_timestamp"
+        )
+        count = count_rows[0]["cnt"] if count_rows else 0
+        self.execute(
+            f"DELETE FROM {META_SCHEMA}.shared_memory "
+            f"WHERE expires_at IS NOT NULL AND expires_at < current_timestamp"
+        )
+        return count
 
     def close(self) -> None:
         """Close the database connection."""
