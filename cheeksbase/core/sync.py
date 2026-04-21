@@ -2,34 +2,31 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 import re
 import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import duckdb
 
-from cheeksbase.core.db import CheeksbaseDB
+from cheeksbase.core.db import CheeksbaseDB, _validate_identifier
 
+if TYPE_CHECKING:
+    import httpx
 
-def _validate_identifier(name: str) -> str:
-    """Validate and return a SQL identifier (schema/table/column).
-
-    Only allows [a-zA-Z_][a-zA-Z0-9_]* to prevent SQL injection.
-    Raises ValueError if the identifier contains unsafe characters.
-    """
-    if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', name):
-        raise ValueError(f"Invalid SQL identifier: {name!r}")
-    return name
+logger = logging.getLogger(__name__)
 
 
 @dataclass
 class SyncResult:
     """Result of a sync operation."""
+
     connector_name: str
     connector_type: str
     tables_synced: int
@@ -43,7 +40,8 @@ class SyncResult:
 class SyncEngine:
     """Syncs data from sources into DuckDB."""
 
-    def __init__(self, db: CheeksbaseDB):
+    def __init__(self, db: CheeksbaseDB) -> None:
+        """Create a SyncEngine backed by the given database connection."""
         self.db = db
         self._sync_t0: float | None = None
 
@@ -80,7 +78,10 @@ class SyncEngine:
             elif source_type == "graphql":
                 result = self._sync_graphql(source_name, credentials, source_config)
             else:
-                raise ValueError(f"Unknown source type: {source_type}")
+                raise ValueError(
+                    "Unknown source type: "
+                    f"{source_type}. Expected one of: rest_api, database, file, graphql."
+                )
 
             # Update metadata
             if result.table_names:
@@ -136,137 +137,50 @@ class SyncEngine:
 
         from cheeksbase.connectors.registry import get_connector_config
 
-        # Load connector config from YAML
         connector_config = get_connector_config(source_name)
         if not connector_config:
-            raise ValueError(f"No connector config found for {source_name}")
+            raise ValueError(
+                f"No connector config found for {source_name}. "
+                "Add the connector with `cheeksbase add` or place its YAML config "
+                "in the connectors directory."
+            )
 
         base_url = connector_config.get("base_url", "")
         auth_config = connector_config.get("auth", {})
         resources = connector_config.get("resources", [])
-
-        # Build auth headers
         headers = self._build_auth_headers(auth_config, credentials)
 
         total_rows = 0
         tables_synced = 0
-        row_counts = {}
-        table_names = []
+        row_counts: dict[str, int] = {}
+        table_names: list[str] = []
 
         with httpx.Client(timeout=30.0) as client:
             for resource in resources:
                 resource_name = resource["name"]
                 endpoint = resource.get("endpoint", f"/{resource_name}")
                 primary_key = resource.get("primary_key", "id")
-
                 self._log(f"  Syncing {resource_name}...")
 
-                # Pagination config from resource or connector
                 pagination = resource.get("pagination", config.get("pagination", {}))
-                pag_type = pagination.get("type", "")
-                page_size = pagination.get("page_size", 100)
-                cursor_field = pagination.get("cursor_field", "cursor")
-                next_field = pagination.get("next_field", "next_cursor")
-                data_field = pagination.get("data_field", "data")
-                offset_param = pagination.get("offset_param", "offset")
-                limit_param = pagination.get("limit_param", "limit")
+                url = f"{base_url.rstrip('/')}/{endpoint.lstrip('/')}"
 
                 try:
-                    # Fetch data from API (with pagination if configured)
-                    all_data: list[dict] = []
-                    base_url_fetch = f"{base_url.rstrip('/')}/{endpoint.lstrip('/')}"
-
-                    if pag_type == "cursor":
-                        # Cursor-based pagination
-                        cursor: str | None = None
-                        while True:
-                            params: dict[str, Any] = {limit_param: page_size}
-                            if cursor is not None:
-                                params[cursor_field] = cursor
-                            response = client.get(base_url_fetch, headers=headers, params=params)
-                            response.raise_for_status()
-                            data = response.json()
-                            # Extract data from nested wrapper if needed
-                            if isinstance(data, dict) and data_field in data:
-                                page_data = data[data_field]
-                            elif isinstance(data, list):
-                                page_data = data
-                            else:
-                                page_data = [data] if isinstance(data, dict) else []
-                            if not page_data:
-                                break
-                            all_data.extend(page_data)
-                            # Get next cursor
-                            if isinstance(data, dict) and next_field in data:
-                                cursor = data[next_field]
-                                if not cursor:
-                                    break
-                            else:
-                                break
-                            if len(page_data) < page_size:
-                                break
-                    elif pag_type == "offset":
-                        # Offset/limit pagination
-                        offset = 0
-                        while True:
-                            params = {offset_param: offset, limit_param: page_size}
-                            response = client.get(base_url_fetch, headers=headers, params=params)
-                            response.raise_for_status()
-                            data = response.json()
-                            if isinstance(data, dict) and data_field in data:
-                                page_data = data[data_field]
-                            elif isinstance(data, list):
-                                page_data = data
-                            else:
-                                page_data = [data] if isinstance(data, dict) else []
-                            if not page_data:
-                                break
-                            all_data.extend(page_data)
-                            if len(page_data) < page_size:
-                                break
-                            offset += page_size
-                    else:
-                        # No pagination — single fetch
-                        response = client.get(base_url_fetch, headers=headers)
-                        response.raise_for_status()
-                        data = response.json()
-                        if isinstance(data, dict):
-                            # Some APIs wrap results in a key
-                            if len(data) == 1:
-                                key = next(iter(data))
-                                if isinstance(data[key], list):
-                                    data = data[key]
-                        if not isinstance(data, list):
-                            self._log(f"    Warning: Unexpected response format for {resource_name}")
-                            continue
-                        all_data = data
-
-                    data = all_data
-
-                    if not isinstance(data, list):
-                        self._log(f"    Warning: Unexpected response format for {resource_name}")
-                        continue
-
+                    data = self._fetch_paginated(client, url, headers, pagination)
                     if not data:
                         self._log(f"    No data returned for {resource_name}")
                         continue
 
-                    # Create schema and table
-                    safe_source = _validate_identifier(source_name)
-                    safe_resource = _validate_identifier(resource_name)
-                    self.db.conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{safe_source}"')
+                    data_hash = hashlib.sha256(
+                        json.dumps(data, sort_keys=True, default=str).encode()
+                    ).hexdigest()[:16]
+                    self._log(f"    Data hash: {data_hash}")
 
-                    # Convert to DuckDB table
-                    df = self._list_to_duckdb(data, resource_name, primary_key)  # noqa: F841
-                    self.db.conn.execute(f'CREATE OR REPLACE TABLE "{safe_source}"."{safe_resource}" AS SELECT * FROM df')
-
-                    row_count = len(data)
+                    row_count = self._store_resource(source_name, resource_name, data, primary_key)
                     total_rows += row_count
                     tables_synced += 1
                     row_counts[resource_name] = row_count
                     table_names.append(resource_name)
-
-                    self._log(f"    Synced {row_count:,} rows")
 
                 except Exception as e:
                     self._log(f"    Error syncing {resource_name}: {e}")
@@ -302,7 +216,7 @@ class SyncEngine:
             # Detach if already attached from a previous sync
             self.db.conn.execute(f"DETACH DATABASE IF EXISTS {attach_name}")
         except Exception:
-            pass
+            self._log(f"  DETACH {attach_name} failed (may not exist yet)")
 
         self._log(f"  Attaching remote database for {source_name}")
 
@@ -317,7 +231,7 @@ class SyncEngine:
                 attach_sql += " (READ_ONLY)"
             self.db.conn.execute(attach_sql)
         except Exception as e:
-            self._log(f"  Could not attach remote database: {e}")
+            self._log(f"  Could not attach remote database for {source_name}: {e}")
             return SyncResult(
                 connector_name=source_name,
                 connector_type="database",
@@ -351,9 +265,10 @@ class SyncEngine:
                     f'CREATE OR REPLACE TABLE "{safe_source}"."{safe_table}" AS '
                     f'SELECT * FROM {attach_name}."{safe_table}"'
                 )
-                row_count = self.db.conn.execute(
+                row_count_result = self.db.conn.execute(
                     f'SELECT COUNT(*) FROM "{safe_source}"."{safe_table}"'
-                ).fetchone()[0]
+                ).fetchone()
+                row_count = row_count_result[0] if row_count_result else 0
                 total_rows += row_count
                 tables_synced += 1
                 row_counts[table_name] = row_count
@@ -367,7 +282,7 @@ class SyncEngine:
         try:
             self.db.conn.execute(f"DETACH DATABASE {attach_name}")
         except Exception:
-            pass
+            self._log(f"  DETACH {attach_name} failed during cleanup")
 
         return SyncResult(
             connector_name=source_name,
@@ -402,8 +317,8 @@ class SyncEngine:
 
         total_rows = 0
         tables_synced = 0
-        row_counts = {}
-        table_names = []
+        row_counts: dict[str, int] = {}
+        table_names: list[str] = []
 
         safe_source = _validate_identifier(source_name)
         self.db.conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{safe_source}"')
@@ -429,11 +344,13 @@ class SyncEngine:
                 elif file_format == "json":
                     df = self.db.conn.execute(f"SELECT * FROM read_json('{safe_fp}')").fetchdf()
                 else:
-                    self._log(f"    Unsupported format: {file_format}")
+                    self._log(f"    Unsupported format '{file_format}'; expected csv, parquet, or json")
                     continue
 
                 # CREATE OR REPLACE is atomic — if SELECT fails, old table survives
                 self.db.conn.execute(f'CREATE OR REPLACE TABLE "{safe_source}"."{table_name}" AS SELECT * FROM df')
+
+                self._compute_column_stats(source_name, safe_source, table_name)
 
                 row_count = len(df)
                 total_rows += row_count
@@ -468,34 +385,34 @@ class SyncEngine:
 
         from cheeksbase.connectors.registry import get_connector_config
 
-        # Load connector config from YAML
         connector_config = get_connector_config(source_name)
         if not connector_config:
-            raise ValueError(f"No connector config found for {source_name}")
+            raise ValueError(
+                f"No connector config found for {source_name}. "
+                "Add the connector with `cheeksbase add` or place its YAML config "
+                "in the connectors directory."
+            )
 
         endpoint = connector_config.get("endpoint", "")
         auth_config = connector_config.get("auth", {})
         resources = connector_config.get("resources", [])
-
-        # Build auth headers
         headers = self._build_auth_headers(auth_config, credentials)
         headers["Content-Type"] = "application/json"
 
         total_rows = 0
         tables_synced = 0
-        row_counts = {}
-        table_names = []
+        row_counts: dict[str, int] = {}
+        table_names: list[str] = []
 
         with httpx.Client(timeout=30.0) as client:
             for resource in resources:
                 resource_name = resource["name"]
                 query = resource.get("query", "")
                 data_path = resource.get("data_path", "data")
-
+                primary_key = resource.get("primary_key", "id")
                 self._log(f"  Syncing {resource_name}...")
 
                 try:
-                    # Execute GraphQL query
                     response = client.post(
                         endpoint,
                         json={"query": query},
@@ -503,10 +420,8 @@ class SyncEngine:
                     )
                     response.raise_for_status()
 
-                    result = response.json()
-
-                    # Extract data from response
-                    data = result
+                    # Walk the data_path to extract the result list.
+                    data: Any = response.json()
                     for key in data_path.split("."):
                         if isinstance(data, dict) and key in data:
                             data = data[key]
@@ -517,26 +432,15 @@ class SyncEngine:
                     if not isinstance(data, list):
                         self._log(f"    Warning: Unexpected response format for {resource_name}")
                         continue
-
                     if not data:
                         self._log(f"    No data returned for {resource_name}")
                         continue
 
-                    # Create schema and table
-                    self.db.conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{source_name}"')
-
-                    # Convert to DuckDB table
-                    primary_key = resource.get("primary_key", "id")
-                    df = self._list_to_duckdb(data, resource_name, primary_key)  # noqa: F841
-                    self.db.conn.execute(f'CREATE OR REPLACE TABLE "{source_name}"."{resource_name}" AS SELECT * FROM df')
-
-                    row_count = len(data)
+                    row_count = self._store_resource(source_name, resource_name, data, primary_key)
                     total_rows += row_count
                     tables_synced += 1
                     row_counts[resource_name] = row_count
                     table_names.append(resource_name)
-
-                    self._log(f"    Synced {row_count:,} rows")
 
                 except Exception as e:
                     self._log(f"    Error syncing {resource_name}: {e}")
@@ -551,6 +455,164 @@ class SyncEngine:
             row_counts=row_counts,
             table_names=table_names,
         )
+
+    def _compute_column_stats(
+        self, source_name: str, schema_name: str, table_name: str,
+    ) -> None:
+        """Compute and store column statistics (null_rate, distinct_count, sample_values)."""
+        try:
+            col_names = [c[0] for c in self.db.conn.execute(
+                f'SELECT * FROM "{schema_name}"."{table_name}" LIMIT 1'
+            ).description]
+
+            for col_name in col_names:
+                try:
+                    stat_result = self.db.conn.execute(f"""
+                        SELECT
+                            1.0 * (COUNT(*) - COUNT("{col_name}")) / NULLIF(COUNT(*), 0) as null_rate,
+                            COUNT(DISTINCT "{col_name}") as distinct_count
+                        FROM "{schema_name}"."{table_name}"
+                    """).fetchone()
+
+                    if stat_result:
+                        null_rate = float(stat_result[0]) if stat_result[0] is not None else None
+                        distinct_count = int(stat_result[1]) if stat_result[1] is not None else None
+
+                        # Sample top-5 values for categorical columns
+                        sample_vals = None
+                        if distinct_count is not None and distinct_count <= 100:
+                            top_vals = self.db.conn.execute(f"""
+                                SELECT "{col_name}", COUNT(*) as cnt
+                                FROM "{schema_name}"."{table_name}"
+                                GROUP BY "{col_name}"
+                                ORDER BY cnt DESC
+                                LIMIT 5
+                            """).fetchall()
+                            sample_vals = json.dumps([
+                                {"value": str(v[0]), "count": int(v[1])} for v in top_vals
+                            ])
+
+                        self.db.store_column_stats(
+                            connector_name=source_name,
+                            schema_name=schema_name,
+                            table_name=table_name,
+                            column_name=col_name,
+                            null_rate=null_rate,
+                            distinct_count=distinct_count,
+                            sample_values=sample_vals,
+                        )
+                except Exception as e:
+                    self._log(f"    Stats error for {col_name}: {e}")
+        except Exception as e:
+            self._log(f"    Column stats skipped for {schema_name}.{table_name}: {e}")
+
+    def _fetch_paginated(
+        self,
+        client: httpx.Client,
+        url: str,
+        headers: dict[str, str],
+        pagination: dict[str, Any],
+    ) -> list[dict]:
+        """Fetch data from a REST endpoint, handling cursor/offset/no pagination.
+
+        Returns a flat list of record dicts. Empty list if no data.
+        """
+        pag_type = pagination.get("type", "")
+        page_size = pagination.get("page_size", 100)
+        data_field = pagination.get("data_field", "data")
+        cursor_field = pagination.get("cursor_field", "cursor")
+        next_field = pagination.get("next_field", "next_cursor")
+        offset_param = pagination.get("offset_param", "offset")
+        limit_param = pagination.get("limit_param", "limit")
+
+        all_data: list[dict] = []
+
+        if pag_type == "cursor":
+            cursor: str | None = None
+            while True:
+                params: dict[str, Any] = {limit_param: page_size}
+                if cursor is not None:
+                    params[cursor_field] = cursor
+                response = client.get(url, headers=headers, params=params)
+                response.raise_for_status()
+                data = response.json()
+                page_data = self._extract_page_data(data, data_field)
+                if not page_data:
+                    break
+                all_data.extend(page_data)
+                if isinstance(data, dict) and next_field in data:
+                    cursor = data[next_field]
+                    if not cursor:
+                        break
+                else:
+                    break
+                if len(page_data) < page_size:
+                    break
+
+        elif pag_type == "offset":
+            offset = 0
+            while True:
+                params = {offset_param: offset, limit_param: page_size}
+                response = client.get(url, headers=headers, params=params)
+                response.raise_for_status()
+                data = response.json()
+                page_data = self._extract_page_data(data, data_field)
+                if not page_data:
+                    break
+                all_data.extend(page_data)
+                if len(page_data) < page_size:
+                    break
+                offset += page_size
+
+        else:
+            # No pagination — single fetch
+            response = client.get(url, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+            if isinstance(data, dict):
+                if len(data) == 1:
+                    key = next(iter(data))
+                    if isinstance(data[key], list):
+                        data = data[key]
+            if not isinstance(data, list):
+                return []
+            return data
+
+        return all_data
+
+    @staticmethod
+    def _extract_page_data(data: Any, data_field: str) -> list[dict]:
+        """Extract a list of records from an API response, unwrapping nested wrappers."""
+        if isinstance(data, dict) and data_field in data:
+            return data[data_field]
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            return [data]
+        return []
+
+    def _store_resource(
+        self,
+        source_name: str,
+        resource_name: str,
+        data: list[dict],
+        primary_key: str = "id",
+    ) -> int:
+        """Create/update a DuckDB table for a synced resource. Returns row count."""
+        safe_source = _validate_identifier(source_name)
+        safe_resource = _validate_identifier(resource_name)
+        self.db.conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{safe_source}"')
+
+        df = self._list_to_duckdb(data, resource_name, primary_key)  # noqa: F841
+        self.db.conn.execute(
+            f'CREATE OR REPLACE TABLE "{safe_source}"."{safe_resource}" '
+            f"AS SELECT * FROM df"
+        )
+        self._compute_column_stats(source_name, safe_source, safe_resource)
+
+        row_count = len(data)
+        self._log(f"    Synced {row_count:,} rows")
+        return row_count
 
     def _build_auth_headers(self, auth_config: dict[str, Any], credentials: dict[str, str]) -> dict[str, str]:
         """Build authentication headers."""
@@ -573,13 +635,36 @@ class SyncEngine:
         else:
             return {}
 
-    def _list_to_duckdb(self, data: list[dict], table_name: str, primary_key: str) -> duckdb.DuckDBPyRelation:
-        """Convert a list of dicts to a DuckDB relation."""
+    def _list_to_duckdb(self, data: list[dict], table_name: str, primary_key: str) -> duckdb.DuckDBPyConnection:
+        """Convert a list of dicts to a DuckDB relation using native bulk insert."""
+        if not data:
+            return self.db.conn.execute(f"SELECT NULL as {primary_key} WHERE 1=0")
+
+        try:
+            # Use pandas for fast type inference and bulk insert
+            import pandas as pd
+            df = pd.DataFrame(data)
+
+            # Convert nested dicts/lists to JSON strings
+            for col in df.columns:
+                mask = df[col].apply(lambda x: isinstance(x, (dict, list)))
+                if mask.any():
+                    df.loc[mask, col] = df.loc[mask, col].apply(json.dumps)
+
+            # DuckDB can read pandas DataFrames directly — much faster than executemany
+            self.db.conn.execute(f'CREATE OR REPLACE TABLE "{table_name}" AS SELECT * FROM df')
+            return self.db.conn.execute(f'SELECT * FROM "{table_name}"')
+        except Exception:
+            # Fallback to original row-by-row if pandas fails
+            return self._list_to_duckdb_fallback(data, table_name, primary_key)
+
+    def _list_to_duckdb_fallback(self, data: list[dict], table_name: str, primary_key: str) -> duckdb.DuckDBPyConnection:
+        """Fallback: original row-by-row insertion for when pandas is unavailable."""
         if not data:
             return self.db.conn.execute(f"SELECT NULL as {primary_key} WHERE 1=0")
 
         # Get all unique keys from all records
-        all_keys = set()
+        all_keys: set[str] = set()
         for record in data:
             all_keys.update(record.keys())
 
@@ -589,7 +674,6 @@ class SyncEngine:
             row = []
             for key in sorted(all_keys):
                 value = record.get(key)
-                # Handle nested objects by converting to JSON
                 if isinstance(value, (dict, list)):
                     value = json.dumps(value)
                 row.append(value)
@@ -598,7 +682,6 @@ class SyncEngine:
         # Create column definitions
         columns = []
         for key in sorted(all_keys):
-            # Simple type inference
             sample_value = data[0].get(key)
             if isinstance(sample_value, bool):
                 col_type = "BOOLEAN"
@@ -610,15 +693,13 @@ class SyncEngine:
                 col_type = "JSON"
             else:
                 col_type = "VARCHAR"
-            columns.append(f"{key} {col_type}")
+            columns.append(f'"{key}" {col_type}')
 
-        # Create table
-        create_sql = f"CREATE TABLE {table_name} ({', '.join(columns)})"
+        create_sql = f'CREATE TABLE "{table_name}" ({", ".join(columns)})'
         self.db.conn.execute(create_sql)
 
-        # Insert data
         placeholders = ", ".join(["?"] * len(all_keys))
-        insert_sql = f"INSERT INTO {table_name} VALUES ({placeholders})"
+        insert_sql = f'INSERT INTO "{table_name}" VALUES ({placeholders})'
         self.db.conn.executemany(insert_sql, rows)
 
         return self.db.conn.execute(f"SELECT * FROM {table_name}")

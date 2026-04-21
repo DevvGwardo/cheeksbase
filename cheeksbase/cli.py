@@ -21,13 +21,13 @@ from cheeksbase.core.config import (
 
 @click.group()
 @click.version_option(version=__version__)
-def cli():
+def cli() -> None:
     """🔨 Cheeksbase — agent-first data platform."""
     pass
 
 
 @cli.command()
-def init():
+def init() -> None:
     """Initialize Cheeksbase (create config directory and database)."""
     ddir = init_cheeksbase()
 
@@ -52,6 +52,7 @@ def init():
 @click.option("--path", help="Path to files (for file connectors)")
 @click.option("--format", "file_format", help="File format (csv, parquet, json)")
 @click.option("--sync-interval", help="Sync interval (e.g., '1h', '30m')")
+@click.option("--freshness", "freshness_threshold", help="Freshness threshold before showing stale (e.g., '24h', '30m'). Default: 1h")
 def add(
     source_type: str,
     name: str | None,
@@ -63,13 +64,15 @@ def add(
     path: str | None,
     file_format: str | None,
     sync_interval: str | None,
-):
+    freshness_threshold: str | None,
+) -> None:
     """Add a new data connector.
 
     Examples:
       cheeksbase add stripe --api-key sk_test_...
       cheeksbase add postgres --connection-string postgresql://...
       cheeksbase add csv_data --path ./data/*.csv --format csv
+
     """
     # Import here to avoid circular imports
     from cheeksbase.connectors.registry import get_available_connectors
@@ -106,7 +109,7 @@ def add(
         overrides["format"] = file_format
 
     # Add connector
-    add_connector(name, source_type, credentials, overrides or None, sync_interval)
+    add_connector(name, source_type, credentials, overrides or None, sync_interval, freshness_threshold)
 
     click.echo(f"Added connector: {name} ({source_type})")
 
@@ -130,7 +133,7 @@ def add(
 
 @cli.command()
 @click.argument("name")
-def remove(name: str):
+def remove(name: str) -> None:
     """Remove a data connector."""
     connectors = get_connectors()
     if name not in connectors:
@@ -145,13 +148,14 @@ def remove(name: str):
 @click.argument("name", required=False)
 @click.option("--all", "sync_all", is_flag=True, help="Sync all connectors")
 @click.option("--force", is_flag=True, help="Force sync even if not stale")
-def sync(name: str | None, sync_all: bool, force: bool):
+def sync(name: str | None, sync_all: bool, force: bool) -> None:
     """Sync data from connectors.
 
     Examples:
       cheeksbase sync stripe          # sync stripe connector
       cheeksbase sync --all           # sync all connectors
       cheeksbase sync stripe --force  # force sync even if fresh
+
     """
     from cheeksbase.connectors.registry import resolve_source_config
     from cheeksbase.core.db import CheeksbaseDB
@@ -200,12 +204,13 @@ def sync(name: str | None, sync_all: bool, force: bool):
 @click.option("--max-rows", default=200, help="Maximum rows to return")
 @click.option("--pretty", is_flag=True, help="Pretty print results")
 @click.option("--no-cache", is_flag=True, help="Disable query caching")
-def query(sql: str, max_rows: int, pretty: bool, no_cache: bool):
+def query(sql: str, max_rows: int, pretty: bool, no_cache: bool) -> None:
     """Execute a SQL query.
 
     Examples:
       cheeksbase query "SELECT * FROM stripe.customers LIMIT 10"
       cheeksbase query "SELECT COUNT(*) FROM hubspot.contacts" --pretty
+
     """
     from cheeksbase.core.db import CheeksbaseDB
     from cheeksbase.core.query import QueryEngine
@@ -227,12 +232,13 @@ def query(sql: str, max_rows: int, pretty: bool, no_cache: bool):
 @cli.command()
 @click.argument("table")
 @click.option("--pretty", is_flag=True, help="Pretty print results")
-def describe(table: str, pretty: bool):
+def describe(table: str, pretty: bool) -> None:
     """Describe a table's schema and metadata.
 
     Examples:
       cheeksbase describe stripe.customers
       cheeksbase describe customers --pretty
+
     """
     from cheeksbase.core.db import CheeksbaseDB
     from cheeksbase.core.query import QueryEngine
@@ -253,7 +259,7 @@ def describe(table: str, pretty: bool):
 
 @cli.command()
 @click.option("--pretty", is_flag=True, help="Pretty print results")
-def connectors(pretty: bool):
+def connectors(pretty: bool) -> None:
     """List all configured connectors."""
     from cheeksbase.core.db import CheeksbaseDB
     from cheeksbase.core.query import QueryEngine
@@ -272,7 +278,7 @@ def connectors(pretty: bool):
 @click.option("--status", "mutation_status", default=None,
               help="Filter by status (pending, executed, failed)")
 @click.option("--pretty", is_flag=True, help="Pretty print results")
-def mutations_list(mutation_status: str | None, pretty: bool):
+def mutations_list(mutation_status: str | None, pretty: bool) -> None:
     """List mutations."""
     from cheeksbase.core.db import META_SCHEMA, CheeksbaseDB
 
@@ -306,7 +312,7 @@ def mutations_list(mutation_status: str | None, pretty: bool):
 
 @cli.command("confirm")
 @click.argument("mutation_id")
-def confirm_mutation(mutation_id: str):
+def confirm_mutation(mutation_id: str) -> None:
     """Confirm and execute a pending mutation."""
     from cheeksbase.core.db import CheeksbaseDB
     from cheeksbase.mutations.engine import MutationEngine
@@ -321,7 +327,7 @@ def confirm_mutation(mutation_id: str):
 
 @cli.command("reject")
 @click.argument("mutation_id")
-def reject_mutation(mutation_id: str):
+def reject_mutation(mutation_id: str) -> None:
     """Reject a pending mutation."""
     from cheeksbase.core.db import META_SCHEMA, CheeksbaseDB
 
@@ -353,7 +359,7 @@ def reject_mutation(mutation_id: str):
 @cli.command()
 @click.option("--port", default=8000, help="Port to run MCP server on")
 @click.option("--host", default="localhost", help="Host to bind to")
-def serve(port: int, host: str):
+def serve(port: int, host: str) -> None:
     """Start the MCP server for AI agents."""
     from cheeksbase.mcp.server import run_server
 
@@ -364,7 +370,7 @@ def serve(port: int, host: str):
 @cli.command("serve-web")
 @click.option("--port", default=8765, help="Port to run web UI on")
 @click.option("--host", default="127.0.0.1", help="Host to bind to")
-def serve_web(port: int, host: str):
+def serve_web(port: int, host: str) -> None:
     """Start the web UI for browsing your data."""
     try:
         import uvicorn
@@ -387,7 +393,7 @@ def serve_web(port: int, host: str):
 
 @cli.command()
 @click.option("--available", is_flag=True, help="Show available connector types")
-def sources(available: bool):
+def sources(available: bool) -> None:
     """List data sources."""
     from cheeksbase.connectors.registry import get_available_connectors, get_connector_info
 

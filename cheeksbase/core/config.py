@@ -14,14 +14,17 @@ DB_FILE = "cheeksbase.duckdb"
 
 
 def get_cheeksbase_dir() -> Path:
+    """Get the cheeksbase data directory, configurable via CHEEKSBASE_DIR env var."""
     return Path(os.environ.get("CHEEKSBASE_DIR", DEFAULT_DIR))
 
 
 def get_config_path() -> Path:
+    """Get the path to the main config.yaml file."""
     return get_cheeksbase_dir() / CONFIG_FILE
 
 
-def get_db_path() -> Path | str:
+def get_db_path() -> Path:
+    """Get the path to the DuckDB database file."""
     return get_cheeksbase_dir() / DB_FILE
 
 
@@ -86,12 +89,14 @@ def add_connector(
     credentials: dict[str, str],
     overrides: dict[str, Any] | None = None,
     sync_interval: str | None = None,
+    freshness_threshold: str | None = None,
 ) -> None:
     """Add a connector to the configuration.
 
     `source` is the connector registry name (e.g. "csv", "stripe") used to
     look up the template at sync time. `overrides` are merged onto the
     template (e.g. `{"path": "/tmp/*.csv", "format": "csv"}`).
+    `freshness_threshold` is a human-readable duration like "24h" or "30m".
     """
     config = load_config()
     connector_config: dict[str, Any] = {
@@ -102,6 +107,8 @@ def add_connector(
         connector_config["overrides"] = overrides
     if sync_interval:
         connector_config["sync_interval"] = sync_interval
+    if freshness_threshold:
+        connector_config["freshness_threshold"] = freshness_threshold
     config["connectors"][name] = connector_config
     save_config(config)
 

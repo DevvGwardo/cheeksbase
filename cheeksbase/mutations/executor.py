@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from cheeksbase.core.db import CheeksbaseDB
 from cheeksbase.mutations.preview import parse_target
+
+logger = logging.getLogger(__name__)
 
 
 def execute_mutation(
@@ -27,6 +30,7 @@ def execute_mutation(
     Returns:
         Dict with keys: rows_affected, local_applied, source_applied,
         source_error (optional).
+
     """
     result: dict[str, Any] = {
         "rows_affected": 0,
@@ -46,6 +50,7 @@ def execute_mutation(
             if fetched and isinstance(fetched[0], int):
                 rows_affected = fetched[0]
         except Exception:
+            logger.debug("Could not fetch row count from mutation result", exc_info=True)
             rows_affected = None
         result["rows_affected"] = rows_affected if rows_affected is not None else 0
         result["local_applied"] = True
@@ -104,7 +109,15 @@ def _write_back_to_source(
     # Resource lookup: match connector resource by table name.
     resources = connector.get("resources") or connector.get("config", {}).get("resources", [])
     resource = next((r for r in resources if r.get("name") == parsed["table"]), None)
-    endpoint = resource.get("endpoint", "") if resource else ""
+    if resource is None:
+        return {
+            "ok": False,
+            "error": (
+                f"No resource definition found for table '{parsed['table']}' "
+                f"in connector config. Write-back requires a matching resource entry."
+            ),
+        }
+    endpoint = resource.get("endpoint", "")
     url = base_url.rstrip("/") + endpoint
 
     # Build auth headers.

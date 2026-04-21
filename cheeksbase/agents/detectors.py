@@ -1,13 +1,20 @@
 """Heuristic detectors for relationships, PII, and descriptions.
 
-Pure functions — no database access, no side effects. The semantic agent
+Core detection functions are pure — no database access, no side effects.
+Some validation helpers (``validate_relationship``, ``detect_pii_in_values``)
+accept a ``CheeksbaseDB`` handle for data-level checks. The semantic agent
 orchestrates these and writes results to metadata tables.
 """
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
+
+from cheeksbase.core.db import CheeksbaseDB
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Relationships
@@ -17,6 +24,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class Relationship:
     """A detected foreign-key relationship between two columns."""
+
     from_table: str
     from_column: str
     to_table: str
@@ -84,6 +92,7 @@ def detect_relationships(
         A list of `Relationship` records. Self-references (a table's FK
         pointing back at itself) are included only when the column name is
         clearly distinct from the table's own primary key.
+
     """
     tables = set(columns.keys())
     relationships: list[Relationship] = []
@@ -238,3 +247,102 @@ def generate_column_description(column_name: str, pii_type: str | None = None) -
     if column_name.lower().endswith("_at"):
         return f"Timestamp: {human}."
     return f"{human.capitalize()}."
+
+
+# ---------------------------------------------------------------------------
+# Data-level validation and PII detection
+# ---------------------------------------------------------------------------
+
+
+def validate_relationship(
+    db: CheeksbaseDB,
+    schema: str,
+    rel: Relationship,
+) -> dict[str, float]:
+    """Validate a heuristic relationship against actual data.
+
+    Returns dict with orphan_rate (fraction of FK values not in target)
+    and fk_coverage (fraction of target PK values that are referenced).
+    """
+    try:
+        # Orphan rate: % of FK values that don't exist in target
+        orphan_result = db.query(f"""
+            SELECT
+                1.0 * COUNT(*) FILTER (WHERE t."{rel.from_column}" IS NOT NULL
+                    AND t."{rel.from_column}" NOT IN (
+                        SELECT "{rel.to_column}" FROM "{schema}"."{rel.to_table}"
+                    ))
+                / NULLIF(COUNT(*) FILTER (WHERE t."{rel.from_column}" IS NOT NULL), 0)
+                as orphan_rate
+            FROM "{schema}"."{rel.from_table}" t
+        """)
+        orphan_rate = orphan_result[0]["orphan_rate"] if orphan_result else 1.0
+
+        # FK coverage: % of target PK values that are actually referenced
+        coverage_result = db.query(f"""
+            SELECT
+                1.0 * COUNT(DISTINCT t."{rel.from_column}")
+                / NULLIF((SELECT COUNT(DISTINCT "{rel.to_column}") FROM "{schema}"."{rel.to_table}"), 0)
+                as fk_coverage
+            FROM "{schema}"."{rel.from_table}" t
+            WHERE t."{rel.from_column}" IS NOT NULL
+        """)
+        fk_coverage = coverage_result[0]["fk_coverage"] if coverage_result else 0.0
+
+        return {"orphan_rate": orphan_rate, "fk_coverage": fk_coverage}
+    except Exception:
+        logger.debug("Failed to validate relationship %s", rel, exc_info=True)
+        return {"orphan_rate": float("nan"), "fk_coverage": float("nan")}
+
+
+# Patterns for value-level PII detection
+_PII_VALUE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("email", re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')),
+    ("phone", re.compile(r'^[\+]?[\d\s\-\(\)]{7,15}$')),
+    ("ssn", re.compile(r'^\d{3}-\d{2}-\d{4}$')),
+    ("credit_card", re.compile(r'^\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}$')),
+    ("ip_address", re.compile(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$')),
+]
+
+
+def detect_pii_in_values(
+    db: CheeksbaseDB,
+    schema: str,
+    table: str,
+    columns: list[str],
+    sample_size: int = 100,
+) -> dict[str, str]:
+    """Sample actual data values to detect PII that column-name detection missed.
+
+    Returns dict mapping column_name -> pii_type for columns with value-level PII.
+    """
+    result: dict[str, str] = {}
+    try:
+        # Get sample of non-null values
+        sample_result = db.query(f"""
+            SELECT * FROM "{schema}"."{table}"
+            WHERE {" OR ".join(f'"{c}" IS NOT NULL' for c in columns)}
+            LIMIT {sample_size}
+        """)
+
+        if not sample_result:
+            return result
+
+        for col in columns:
+            if col.lower() in _NAME_FALSE_POSITIVES:
+                continue
+            # Collect non-null string values
+            values = [str(row.get(col, "")) for row in sample_result if row.get(col)]
+            if not values:
+                continue
+
+            # Test each value against patterns
+            for pii_type, pattern in _PII_VALUE_PATTERNS:
+                matches = sum(1 for v in values if pattern.match(v))
+                if matches >= max(3, len(values) * 0.3):  # 30%+ match or at least 3
+                    result[col] = pii_type
+                    break
+    except Exception:
+        logger.debug("Failed to detect PII in values", exc_info=True)
+
+    return result

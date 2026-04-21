@@ -38,7 +38,36 @@ _DELETE_RE = re.compile(
 )
 
 
+def _skip_cte_prefix(sql: str) -> str:
+    """If *sql* starts with a WITH clause, return the SQL after the CTEs.
+
+    Scans through balanced parentheses to find where CTE definitions end,
+    then returns everything after the closing ``)`` (stripped).  Returns the
+    original *sql* unchanged when there is no WITH prefix.
+    """
+    if not sql.strip().upper().startswith("WITH "):
+        return sql
+    depth = 0
+    for i, ch in enumerate(sql):
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                after = sql[i + 1:].lstrip()
+                if after and after[0] == ",":
+                    continue  # more CTEs remain
+                if after:
+                    return after
+                return sql
+    return sql
+
+
 def _first_word(sql: str) -> str:
+    """Return the first SQL keyword (uppercased) after stripping comments and CTEs.
+
+    Returns the empty string for blank input.
+    """
     stripped = sql.strip()
     if not stripped:
         return ""
@@ -48,26 +77,8 @@ def _first_word(sql: str) -> str:
     cleaned = cleaned.strip()
     if not cleaned:
         return ""
-    upper = cleaned.upper()
-    if upper.startswith("WITH "):
-        # Scan through CTE definitions to find where they end
-        depth = 0
-        i = 0
-        n = len(cleaned)
-        while i < n:
-            ch = cleaned[i]
-            if ch == '(':
-                depth += 1
-            elif ch == ')':
-                depth -= 1
-                if depth == 0:
-                    after = cleaned[i + 1:].lstrip()
-                    if after and after[0] == ',':
-                        i += 1  # more CTEs
-                    elif after:
-                        return after.split()[0].upper()
-            i += 1
-    return cleaned.split()[0].upper()
+    after_cte = _skip_cte_prefix(cleaned)
+    return after_cte.split()[0].upper()
 
 
 def parse_target(sql: str) -> dict[str, Any]:
@@ -87,26 +98,7 @@ def parse_target(sql: str) -> dict[str, Any]:
     }
 
     # Strip WITH CTE prefix so regexes can match the actual operation
-    parse_sql = sql
-    upper = sql.strip().upper()
-    if upper.startswith("WITH "):
-        depth = 0
-        i = 0
-        n = len(sql)
-        while i < n:
-            ch = sql[i]
-            if ch == '(':
-                depth += 1
-            elif ch == ')':
-                depth -= 1
-                if depth == 0:
-                    after = sql[i + 1:].lstrip()
-                    if after and after[0] == ',':
-                        i += 1  # more CTEs
-                    elif after:
-                        parse_sql = after
-                        break
-            i += 1
+    parse_sql = _skip_cte_prefix(sql.strip())
 
     if op == "UPDATE":
         m = _UPDATE_RE.match(parse_sql)

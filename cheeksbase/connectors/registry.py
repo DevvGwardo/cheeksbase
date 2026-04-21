@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
 
@@ -229,4 +229,7 @@ def create_connector_template(connector_name: str, connector_type: str) -> dict[
         },
     }
 
-    return templates.get(connector_type, templates["rest_api"])
+    template = cast("dict[str, Any] | None", templates.get(connector_type))
+    if template is not None:
+        return template
+    return cast("dict[str, Any]", templates["rest_api"])

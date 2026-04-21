@@ -19,6 +19,7 @@ Designed to be called after a successful sync:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from types import TracebackType
 
 from cheeksbase.agents.detectors import (
     Relationship,
@@ -33,6 +34,7 @@ from cheeksbase.core.db import CheeksbaseDB
 @dataclass
 class AnnotationResult:
     """Summary of what a single ``annotate_connector`` call produced."""
+
     connector_name: str
     tables_annotated: int = 0
     columns_annotated: int = 0
@@ -40,6 +42,7 @@ class AnnotationResult:
     relationships: list[Relationship] = field(default_factory=list)
 
     def summary(self) -> str:
+        """Return a human-readable summary of the annotation results."""
         return (
             f"Annotated {self.tables_annotated} tables, "
             f"{self.columns_annotated} columns, "
@@ -51,7 +54,12 @@ class AnnotationResult:
 class SemanticAgent:
     """Heuristic annotator for freshly synced connector data."""
 
-    def __init__(self, db: CheeksbaseDB | None = None):
+    def __init__(self, db: CheeksbaseDB | None = None) -> None:
+        """Create a new SemanticAgent.
+
+        If *db* is omitted, a fresh ``CheeksbaseDB`` instance is created
+        and will be closed when ``close()`` or ``__exit__`` is called.
+        """
         self._owns_db = db is None
         self.db = db or CheeksbaseDB()
 
@@ -103,9 +111,16 @@ class SemanticAgent:
             self.db.close()
 
     def __enter__(self) -> SemanticAgent:
+        """Enter the context manager."""
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        """Exit the context manager and close the DB if owned."""
         self.close()
 
     # ---- internals ------------------------------------------------------
@@ -153,7 +168,8 @@ class SemanticAgent:
                 )
                 # Also expose PII through the generic metadata table so agents
                 # querying by key can find it without knowing the `note` format.
-                self.db.set_metadata(schema, table, "pii_type", pii_type, column=col)
+                if pii_type is not None:
+                    self.db.set_metadata(schema, table, "pii_type", pii_type, column=col)
             else:
                 self.db.conn.execute(
                     "INSERT INTO _cheeksbase.columns "

@@ -5,3 +5,4 @@ description: Parquet file connector with glob path support and auto-schema detec
 path: ./data/*.parquet
 format: parquet
 auto_schema: true
+freshness_threshold: 24h

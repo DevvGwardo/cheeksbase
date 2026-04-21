@@ -5,3 +5,4 @@ description: JSON file connector with glob path support and auto-schema detectio
 path: ./data/*.json
 format: json
 auto_schema: true
+freshness_threshold: 24h

@@ -175,7 +175,7 @@ class TestListToDuckdb:
         rel = engine._list_to_duckdb(data, "types_table", "label")
         col_types = {d[0]: str(d[1]).upper() for d in rel.description}
         assert col_types["flag"] == "BOOLEAN"
-        assert col_types["count"] == "INTEGER"
+        assert col_types["count"] == "BIGINT"  # pandas int64 maps to BIGINT
         assert col_types["ratio"] == "DOUBLE"
         assert col_types["label"] == "VARCHAR"
 

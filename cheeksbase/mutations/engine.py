@@ -25,7 +25,8 @@ class MutationEngine:
     across sessions.
     """
 
-    def __init__(self, db: CheeksbaseDB):
+    def __init__(self, db: CheeksbaseDB) -> None:
+        """Create a MutationEngine backed by the given database connection."""
         self.db = db
 
     # --- Public API --------------------------------------------------------
@@ -69,8 +70,9 @@ class MutationEngine:
             ),
         }
 
-    # Convenience alias so the documented `engine.execute(sql)` flow works.
-    execute = handle_sql
+    def execute(self, sql: str) -> dict[str, Any]:
+        """Alias for handle_sql()."""
+        return self.handle_sql(sql)
 
     def confirm(self, mutation_id: str) -> dict[str, Any]:
         """Execute a previously-previewed mutation."""
@@ -78,14 +80,18 @@ class MutationEngine:
         if record is None:
             return {
                 "status": "error",
-                "error": f"Unknown mutation_id: {mutation_id}",
+                "error": (
+                    f"Unknown mutation_id: {mutation_id}. "
+                    "Call list_pending() to inspect pending mutations before confirming."
+                ),
             }
         if record["status"] != "pending":
             return {
                 "status": "error",
                 "error": (
                     f"Mutation {mutation_id} is not pending "
-                    f"(current status: {record['status']})."
+                    f"(current status: {record['status']}). "
+                    "Use list_pending() to see mutations that can still be confirmed."
                 ),
             }
 
@@ -152,16 +158,14 @@ class MutationEngine:
         )
 
     def _load_pending(self, mutation_id: str) -> dict[str, Any] | None:
-        result = self.db.conn.execute(
+        rows = self.db.query(
             f"SELECT mutation_id, connector_name, table_name, operation, "
             f"sql_text, preview, status "
             f"FROM {META_SCHEMA}.mutations "
             f"WHERE mutation_id = ?",
             [mutation_id],
         )
-        cols = [d[0] for d in result.description]
-        row = result.fetchone()
-        return dict(zip(cols, row)) if row else None
+        return rows[0] if rows else None
 
     def _mark_confirmed(self, mutation_id: str) -> None:
         self.db.conn.execute(
