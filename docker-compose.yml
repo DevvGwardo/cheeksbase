@@ -1,0 +1,60 @@
+version: "3.8"
+
+services:
+  cheeksbase:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cheeksbase
+    restart: unless-stopped
+    ports:
+      # Map host port (default 8000) to container port 8000
+      - "${CHEEKSBASE_PORT:-8000}:8000"
+    volumes:
+      # Named volume for persistent DuckDB + cache
+      - cheeksbase_data:/data
+      # Optional: bind-mount an existing config.yaml from host
+      # - ./config.yaml:/data/config.yaml:ro
+      # Optional: bind-mount an existing DuckDB file from host
+      # - ./cheeksbase.duckdb:/data/cheeksbase.duckdb
+    environment:
+      # Data directory inside the container
+      - CHEEKSBASE_DIR=/data
+      # Bind to all interfaces so other containers can reach the server
+      - HOST=0.0.0.0
+      # Server port inside the container
+      - PORT=8000
+    networks:
+      - cheeksbase-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.connect(('127.0.0.1', 8000)); s.close()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # ---------------------------------------------------------------------------
+  # Example hermes-agent service showing how to connect to the cheeksbase MCP
+  # server from a separate container. Replace the image with your actual agent.
+  # ---------------------------------------------------------------------------
+  hermes-agent:
+    image: hermes-agent:latest
+    container_name: hermes-agent
+    # Environment variables the agent can read to locate the MCP server
+    environment:
+      - CHEEKSBASE_MCP_HOST=cheeksbase
+      - CHEEKSBASE_MCP_PORT=8000
+      - CHEEKSBASE_MCP_URL=http://cheeksbase:8000
+    networks:
+      - cheeksbase-net
+    depends_on:
+      cheeksbase:
+        condition: service_healthy
+
+networks:
+  cheeksbase-net:
+    driver: bridge
+
+volumes:
+  cheeksbase_data:
+    driver: local
