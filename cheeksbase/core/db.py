@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
 from collections.abc import Sequence
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import TracebackType
 from typing import Any
@@ -154,9 +156,11 @@ CREATE TABLE IF NOT EXISTS {META_SCHEMA}.query_templates (
     success_rate FLOAT DEFAULT 1.0,
     created_at TIMESTAMP DEFAULT current_timestamp
 );
-CREATE SEQUENCE IF NOT EXISTS _cheeksbase.shared_memory_seq;
-CREATE TABLE IF NOT EXISTS _cheeksbase.shared_memory (
-    id INTEGER PRIMARY KEY DEFAULT nextval('_cheeksbase.shared_memory_seq'),
+
+CREATE SEQUENCE IF NOT EXISTS {META_SCHEMA}.shared_memory_seq START 1;
+
+CREATE TABLE IF NOT EXISTS {META_SCHEMA}.shared_memory (
+    id INTEGER PRIMARY KEY DEFAULT nextval('{META_SCHEMA}.shared_memory_seq'),
     source_agent VARCHAR NOT NULL,
     scope VARCHAR NOT NULL DEFAULT 'broadcast',
     key VARCHAR NOT NULL UNIQUE,
@@ -168,10 +172,91 @@ CREATE TABLE IF NOT EXISTS _cheeksbase.shared_memory (
     updated_at TIMESTAMP DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS {META_SCHEMA}.agent_runs (
+    run_id VARCHAR PRIMARY KEY,
+    agent_name VARCHAR NOT NULL,
+    profile_name VARCHAR,
+    workspace_id VARCHAR,
+    role VARCHAR,
+    status VARCHAR DEFAULT 'active',
+    current_task VARCHAR,
+    current_summary VARCHAR,
+    progress DOUBLE,
+    started_at TIMESTAMP DEFAULT current_timestamp,
+    last_heartbeat_at TIMESTAMP DEFAULT current_timestamp,
+    finished_at TIMESTAMP,
+    metadata_json JSON
+);
+
+CREATE SEQUENCE IF NOT EXISTS {META_SCHEMA}.agent_events_seq START 1;
+
+CREATE TABLE IF NOT EXISTS {META_SCHEMA}.agent_events (
+    id INTEGER PRIMARY KEY DEFAULT nextval('{META_SCHEMA}.agent_events_seq'),
+    event_id VARCHAR NOT NULL UNIQUE,
+    run_id VARCHAR NOT NULL,
+    workspace_id VARCHAR,
+    event_type VARCHAR NOT NULL,
+    task_id VARCHAR,
+    file_path VARCHAR,
+    payload_json JSON,
+    summary_text VARCHAR,
+    ts TIMESTAMP DEFAULT current_timestamp
+);
+
+CREATE TABLE IF NOT EXISTS {META_SCHEMA}.resource_claims (
+    resource_key VARCHAR PRIMARY KEY,
+    resource_type VARCHAR NOT NULL,
+    workspace_id VARCHAR,
+    claimed_by VARCHAR NOT NULL,
+    task_id VARCHAR,
+    claimed_at TIMESTAMP DEFAULT current_timestamp,
+    lease_expires_at TIMESTAMP NOT NULL,
+    released_at TIMESTAMP,
+    status VARCHAR DEFAULT 'claimed',
+    metadata_json JSON
+);
+
+CREATE OR REPLACE VIEW {META_SCHEMA}.active_agent_runs AS
+SELECT *
+FROM {META_SCHEMA}.agent_runs
+WHERE status IN ('registered', 'active', 'idle', 'blocked');
+
+CREATE OR REPLACE VIEW {META_SCHEMA}.active_resource_claims AS
+SELECT *
+FROM {META_SCHEMA}.resource_claims
+WHERE status = 'claimed'
+  AND lease_expires_at > current_timestamp;
+
+CREATE INDEX IF NOT EXISTS idx_agent_runs_workspace_status
+    ON {META_SCHEMA}.agent_runs(workspace_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_agent_events_workspace_ts
+    ON {META_SCHEMA}.agent_events(workspace_id, ts);
+
+CREATE INDEX IF NOT EXISTS idx_agent_events_run_ts
+    ON {META_SCHEMA}.agent_events(run_id, ts);
+
+CREATE INDEX IF NOT EXISTS idx_resource_claims_workspace_status
+    ON {META_SCHEMA}.resource_claims(workspace_id, status);
 """
 
 
-_META_TABLES = ["sync_log", "tables", "columns", "live_rows", "mutations", "relationships", "metadata", "query_cache", "query_history", "query_templates", "shared_memory"]
+_META_TABLES = [
+    "sync_log",
+    "tables",
+    "columns",
+    "live_rows",
+    "mutations",
+    "relationships",
+    "metadata",
+    "query_cache",
+    "query_history",
+    "query_templates",
+    "shared_memory",
+    "agent_runs",
+    "agent_events",
+    "resource_claims",
+]
 
 
 class CheeksbaseDB:
@@ -528,7 +613,6 @@ class CheeksbaseDB:
              null_rate, distinct_count, sample_values, min_value, max_value],
         )
 
-
     # ── Shared Memory ─────────────────────────────────────────────────────
 
     def shared_remember(
@@ -669,6 +753,281 @@ class CheeksbaseDB:
             f"WHERE expires_at IS NOT NULL AND expires_at < current_timestamp"
         )
         return count
+
+    # ── Agent Coordination ────────────────────────────────────────────────
+
+    def register_agent_run(
+        self,
+        agent_name: str,
+        role: str,
+        workspace_id: str | None = None,
+        profile_name: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        """Register a new agent run and return its run_id."""
+        run_id = f"run_{uuid.uuid4().hex[:12]}"
+        self.conn.execute(
+            f"INSERT INTO {META_SCHEMA}.agent_runs "
+            "(run_id, agent_name, profile_name, workspace_id, role, status, metadata_json) "
+            "VALUES (?, ?, ?, ?, ?, 'active', ?)",
+            [run_id, agent_name, profile_name, workspace_id, role, json.dumps(metadata or {})],
+        )
+        self.post_agent_event(
+            run_id=run_id,
+            event_type="registered",
+            summary_text=f"Agent {agent_name} registered",
+            payload={"role": role, "profile_name": profile_name},
+        )
+        return run_id
+
+    def heartbeat_agent_run(
+        self,
+        run_id: str,
+        current_task: str | None = None,
+        current_summary: str | None = None,
+        progress: float | None = None,
+        status: str = "active",
+    ) -> dict[str, Any]:
+        """Update agent liveness and current status fields."""
+        self.conn.execute(
+            f"UPDATE {META_SCHEMA}.agent_runs "
+            "SET last_heartbeat_at = current_timestamp, "
+            "current_task = COALESCE(?, current_task), "
+            "current_summary = COALESCE(?, current_summary), "
+            "progress = COALESCE(?, progress), "
+            "status = COALESCE(?, status) "
+            "WHERE run_id = ?",
+            [current_task, current_summary, progress, status, run_id],
+        )
+        rows = self.query(
+            f"SELECT run_id, status, current_task, current_summary, progress, last_heartbeat_at "
+            f"FROM {META_SCHEMA}.agent_runs WHERE run_id = ?",
+            [run_id],
+        )
+        return rows[0] if rows else {"error": f"Unknown run_id: {run_id}"}
+
+    def post_agent_event(
+        self,
+        run_id: str,
+        event_type: str,
+        task_id: str | None = None,
+        file_path: str | None = None,
+        summary_text: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Append an agent event to the shared coordination log."""
+        event_id = f"evt_{uuid.uuid4().hex[:12]}"
+        workspace_rows = self.query(
+            f"SELECT workspace_id FROM {META_SCHEMA}.agent_runs WHERE run_id = ?",
+            [run_id],
+        )
+        workspace_id = workspace_rows[0]["workspace_id"] if workspace_rows else None
+        self.conn.execute(
+            f"INSERT INTO {META_SCHEMA}.agent_events "
+            "(event_id, run_id, workspace_id, event_type, task_id, file_path, payload_json, summary_text) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                event_id,
+                run_id,
+                workspace_id,
+                event_type,
+                task_id,
+                file_path,
+                json.dumps(payload or {}),
+                summary_text,
+            ],
+        )
+        return {
+            "status": "recorded",
+            "event_id": event_id,
+            "run_id": run_id,
+            "event_type": event_type,
+        }
+
+    def claim_resource(
+        self,
+        run_id: str,
+        resource_type: str,
+        resource_key: str,
+        lease_seconds: int = 300,
+        task_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Claim a resource with a lease to avoid multi-agent collisions."""
+        if lease_seconds <= 0:
+            raise ValueError("lease_seconds must be > 0")
+
+        self.conn.execute(
+            f"UPDATE {META_SCHEMA}.resource_claims "
+            "SET status = 'expired' "
+            "WHERE resource_key = ? AND status = 'claimed' AND lease_expires_at <= current_timestamp",
+            [resource_key],
+        )
+
+        active = self.query(
+            f"SELECT resource_key, claimed_by, lease_expires_at "
+            f"FROM {META_SCHEMA}.active_resource_claims WHERE resource_key = ?",
+            [resource_key],
+        )
+        if active and active[0]["claimed_by"] != run_id:
+            return {
+                "status": "conflict",
+                "resource_key": resource_key,
+                "claimed_by": active[0]["claimed_by"],
+                "lease_expires_at": active[0]["lease_expires_at"],
+            }
+
+        workspace_rows = self.query(
+            f"SELECT workspace_id FROM {META_SCHEMA}.agent_runs WHERE run_id = ?",
+            [run_id],
+        )
+        workspace_id = workspace_rows[0]["workspace_id"] if workspace_rows else None
+
+        claimed_at = datetime.now(timezone.utc)
+        lease_expires_at = claimed_at + timedelta(seconds=int(lease_seconds))
+        self.conn.execute(
+            f"INSERT INTO {META_SCHEMA}.resource_claims "
+            f"(resource_key, resource_type, workspace_id, claimed_by, task_id, claimed_at, lease_expires_at, released_at, status, metadata_json) "
+            f"VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'claimed', ?) "
+            f"ON CONFLICT (resource_key) DO UPDATE SET "
+            f"resource_type = excluded.resource_type, "
+            f"workspace_id = excluded.workspace_id, "
+            f"claimed_by = excluded.claimed_by, "
+            f"task_id = excluded.task_id, "
+            f"claimed_at = excluded.claimed_at, "
+            f"lease_expires_at = excluded.lease_expires_at, "
+            f"released_at = NULL, "
+            f"status = 'claimed', "
+            f"metadata_json = excluded.metadata_json",
+            [
+                resource_key,
+                resource_type,
+                workspace_id,
+                run_id,
+                task_id,
+                claimed_at,
+                lease_expires_at,
+                json.dumps(metadata or {}),
+            ],
+        )
+        return {
+            "status": "claimed",
+            "resource_key": resource_key,
+            "resource_type": resource_type,
+            "claimed_by": run_id,
+        }
+
+    def release_resource(self, run_id: str, resource_key: str) -> dict[str, Any]:
+        """Release a currently claimed resource."""
+        updated = self.conn.execute(
+            f"UPDATE {META_SCHEMA}.resource_claims "
+            "SET status = 'released', released_at = current_timestamp "
+            "WHERE resource_key = ? AND claimed_by = ? AND status = 'claimed' "
+            "RETURNING resource_key, claimed_by, status, released_at",
+            [resource_key, run_id],
+        ).fetchall()
+        if not updated:
+            return {
+                "status": "not_found",
+                "resource_key": resource_key,
+                "claimed_by": run_id,
+            }
+        row = updated[0]
+        return {
+            "status": "released",
+            "resource_key": row[0],
+            "claimed_by": row[1],
+            "released_at": row[3],
+        }
+
+    def list_agent_runs(self, workspace_id: str | None = None) -> list[dict[str, Any]]:
+        """List current agent runs with lightweight aggregated claim counts."""
+        sql = f"""
+            SELECT
+                r.run_id,
+                r.agent_name,
+                r.profile_name,
+                r.workspace_id,
+                r.role,
+                r.status,
+                r.current_task,
+                r.current_summary,
+                r.progress,
+                r.started_at,
+                r.last_heartbeat_at,
+                COALESCE(c.open_claim_count, 0) AS open_claim_count
+            FROM {META_SCHEMA}.active_agent_runs r
+            LEFT JOIN (
+                SELECT claimed_by, COUNT(*) AS open_claim_count
+                FROM {META_SCHEMA}.active_resource_claims
+                GROUP BY claimed_by
+            ) c ON c.claimed_by = r.run_id
+        """
+        params: list[Any] = []
+        if workspace_id is not None:
+            sql += " WHERE r.workspace_id = ?"
+            params.append(workspace_id)
+        sql += " ORDER BY r.last_heartbeat_at DESC, r.started_at DESC"
+        return self.query(sql, params if params else None)
+
+    def get_agent_updates(
+        self,
+        workspace_id: str | None = None,
+        since_ts: Any | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """Return current agents plus incremental events/claims since a timestamp."""
+        event_sql = f"""
+            SELECT event_id, run_id, workspace_id, event_type, task_id, file_path,
+                   payload_json, summary_text, ts
+            FROM {META_SCHEMA}.agent_events
+            WHERE 1 = 1
+        """
+        event_params: list[Any] = []
+        if workspace_id is not None:
+            event_sql += " AND workspace_id = ?"
+            event_params.append(workspace_id)
+        if since_ts is not None:
+            event_sql += " AND ts > ?"
+            event_params.append(since_ts)
+        event_sql += " ORDER BY ts DESC LIMIT ?"
+        event_params.append(limit)
+        events = self.query(event_sql, event_params)
+        for event in events:
+            if event.get("payload_json"):
+                event["payload"] = json.loads(event.pop("payload_json"))
+            else:
+                event["payload"] = {}
+                event.pop("payload_json", None)
+
+        claim_sql = f"""
+            SELECT resource_key, resource_type, workspace_id, claimed_by, task_id,
+                   claimed_at, lease_expires_at, released_at, status, metadata_json
+            FROM {META_SCHEMA}.resource_claims
+            WHERE 1 = 1
+        """
+        claim_params: list[Any] = []
+        if workspace_id is not None:
+            claim_sql += " AND workspace_id = ?"
+            claim_params.append(workspace_id)
+        if since_ts is not None:
+            claim_sql += " AND COALESCE(released_at, claimed_at) > ?"
+            claim_params.append(since_ts)
+        claim_sql += " ORDER BY COALESCE(released_at, claimed_at) DESC LIMIT ?"
+        claim_params.append(limit)
+        claims = self.query(claim_sql, claim_params)
+        for claim in claims:
+            if claim.get("metadata_json"):
+                claim["metadata"] = json.loads(claim.pop("metadata_json"))
+            else:
+                claim["metadata"] = {}
+                claim.pop("metadata_json", None)
+
+        return {
+            "agents": self.list_agent_runs(workspace_id=workspace_id),
+            "events": events,
+            "claims": claims,
+        }
 
     def close(self) -> None:
         """Close the database connection."""

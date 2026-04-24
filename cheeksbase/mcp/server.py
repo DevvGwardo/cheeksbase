@@ -139,6 +139,27 @@ def _dispatch_chain_call(tool_name: str, args: dict[str, Any]) -> dict[str, Any]
             },
         }
 
+    if tool_name == "register_agent":
+        return {"tool": tool_name, "result": json.loads(register_agent(**args))}
+
+    if tool_name == "heartbeat":
+        return {"tool": tool_name, "result": json.loads(heartbeat(**args))}
+
+    if tool_name == "post_event":
+        return {"tool": tool_name, "result": json.loads(post_event(**args))}
+
+    if tool_name == "claim_resource":
+        return {"tool": tool_name, "result": json.loads(claim_resource(**args))}
+
+    if tool_name == "release_resource":
+        return {"tool": tool_name, "result": json.loads(release_resource(**args))}
+
+    if tool_name == "list_agents":
+        return {"tool": tool_name, "result": json.loads(list_agents(**args))}
+
+    if tool_name == "get_updates":
+        return {"tool": tool_name, "result": json.loads(get_updates(**args))}
+
     return {"tool": tool_name, "error": f"Unknown tool: {tool_name}"}
 
 
@@ -275,6 +296,121 @@ def sync(
         "rows_synced": result.rows_synced,
         "error": result.error,
     }, indent=2, default=str)
+
+
+def register_agent(
+    agent_name: Annotated[str, Field(description="Stable agent name, e.g. 'builder-1'")],
+    role: Annotated[str, Field(description="Agent role, e.g. builder, reviewer, coordinator")],
+    workspace_id: Annotated[str | None, Field(description="Shared workspace or repo identifier")] = None,
+    profile_name: Annotated[str | None, Field(description="Optional Hermes profile name")] = None,
+    metadata_json: Annotated[str | None, Field(description="Optional JSON metadata string")] = None,
+) -> str:
+    """Register an agent in the shared coordination bus and return a run id."""
+    db = _get_db()
+    metadata = json.loads(metadata_json) if metadata_json else None
+    run_id = db.register_agent_run(
+        agent_name=agent_name,
+        role=role,
+        workspace_id=workspace_id,
+        profile_name=profile_name,
+        metadata=metadata,
+    )
+    return json.dumps({"status": "registered", "run_id": run_id}, indent=2, default=str)
+
+
+def heartbeat(
+    run_id: Annotated[str, Field(description="Run id returned by register_agent")],
+    current_task: Annotated[str | None, Field(description="Current task id/title")] = None,
+    current_summary: Annotated[str | None, Field(description="Short progress summary")] = None,
+    progress: Annotated[float | None, Field(description="Progress fraction between 0 and 1")] = None,
+    status: Annotated[str, Field(description="Agent status, e.g. active/idle/blocked")] = "active",
+) -> str:
+    """Update an agent heartbeat without replaying full session context."""
+    db = _get_db()
+    result = db.heartbeat_agent_run(
+        run_id=run_id,
+        current_task=current_task,
+        current_summary=current_summary,
+        progress=progress,
+        status=status,
+    )
+    payload = {"ok": True, "status": "ok", "agent_status": result.get("status")}
+    payload.update({k: v for k, v in result.items() if k != "status"})
+    return json.dumps(payload, indent=2, default=str)
+
+
+def post_event(
+    run_id: Annotated[str, Field(description="Run id returned by register_agent")],
+    event_type: Annotated[str, Field(description="Event type, e.g. task_started/task_progress/task_completed")],
+    task_id: Annotated[str | None, Field(description="Optional task identifier")] = None,
+    file_path: Annotated[str | None, Field(description="Optional file path tied to the event")] = None,
+    summary_text: Annotated[str | None, Field(description="Short human-readable summary")] = None,
+    payload_json: Annotated[str | None, Field(description="Optional JSON payload string")] = None,
+) -> str:
+    """Append a coordination event for other agents to consume."""
+    db = _get_db()
+    payload = json.loads(payload_json) if payload_json else None
+    result = db.post_agent_event(
+        run_id=run_id,
+        event_type=event_type,
+        task_id=task_id,
+        file_path=file_path,
+        summary_text=summary_text,
+        payload=payload,
+    )
+    return json.dumps(result, indent=2, default=str)
+
+
+def claim_resource(
+    run_id: Annotated[str, Field(description="Run id returned by register_agent")],
+    resource_key: Annotated[str, Field(description="Unique resource key, e.g. repo:path/to/file.ts")],
+    resource_type: Annotated[str, Field(description="Resource type, e.g. file/task/doc")] = "file",
+    lease_seconds: Annotated[int, Field(description="Lease duration in seconds", ge=1, le=86400)] = 300,
+    task_id: Annotated[str | None, Field(description="Optional task identifier")] = None,
+    metadata_json: Annotated[str | None, Field(description="Optional JSON payload string")] = None,
+) -> str:
+    """Claim a shared resource with a lease to avoid collisions."""
+    db = _get_db()
+    metadata = json.loads(metadata_json) if metadata_json else None
+    result = db.claim_resource(
+        run_id=run_id,
+        resource_type=resource_type,
+        resource_key=resource_key,
+        lease_seconds=lease_seconds,
+        task_id=task_id,
+        metadata=metadata,
+    )
+    return json.dumps(result, indent=2, default=str)
+
+
+def release_resource(
+    run_id: Annotated[str, Field(description="Run id returned by register_agent")],
+    resource_key: Annotated[str, Field(description="Previously claimed resource key")],
+) -> str:
+    """Release a resource claim when the agent no longer owns it."""
+    db = _get_db()
+    result = db.release_resource(run_id=run_id, resource_key=resource_key)
+    return json.dumps(result, indent=2, default=str)
+
+
+def list_agents(
+    workspace_id: Annotated[str | None, Field(description="Optional workspace filter")] = None,
+) -> str:
+    """List active agents with lightweight claim counts and current task summaries."""
+    db = _get_db()
+    result = {"agents": db.list_agent_runs(workspace_id=workspace_id)}
+    return json.dumps(result, indent=2, default=str)
+
+
+def get_updates(
+    workspace_id: Annotated[str | None, Field(description="Optional workspace filter")] = None,
+    since_ts: Annotated[str | None, Field(description="Optional ISO-ish timestamp cursor")] = None,
+    limit: Annotated[int, Field(description="Max incremental events/claims to return", ge=1, le=1000)] = 100,
+) -> str:
+    """Fetch incremental coordination updates plus the current agent snapshot."""
+    db = _get_db()
+    result = db.get_agent_updates(workspace_id=workspace_id, since_ts=since_ts, limit=limit)
+    return json.dumps(result, indent=2, default=str)
 
 
 def annotate(
@@ -462,6 +598,13 @@ def create_server() -> FastMCP:
     server.add_tool(find_data, name="find_data")
     server.add_tool(explain_query, name="explain_query")
     server.add_tool(sync, name="sync")
+    server.add_tool(register_agent, name="register_agent")
+    server.add_tool(heartbeat, name="heartbeat")
+    server.add_tool(post_event, name="post_event")
+    server.add_tool(claim_resource, name="claim_resource")
+    server.add_tool(release_resource, name="release_resource")
+    server.add_tool(list_agents, name="list_agents")
+    server.add_tool(get_updates, name="get_updates")
     server.add_tool(annotate, name="annotate")
     server.add_tool(chain, name="chain")
 
