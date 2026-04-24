@@ -2,11 +2,9 @@
 
 import os
 import tempfile
-from pathlib import Path
 
 import pytest
 
-from cheeksbase.core.config import init_cheeksbase
 from cheeksbase.core.db import CheeksbaseDB
 
 
