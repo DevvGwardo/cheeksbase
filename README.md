@@ -318,7 +318,7 @@ Each agent runs as an independent process/profile/session. All agents publish th
 ### Architecture
 
 <p align="center">
-  <img src="docs/diagrams/multi-agent-coordination.svg" alt="Multi-Agent Coordination" width="90%">
+  <img src="docs/diagrams/multi-agent-coordination.png" alt="Multi-Agent Coordination" width="90%">
 </p>
 
 ### Agent Session Lifecycle
@@ -326,7 +326,7 @@ Each agent runs as an independent process/profile/session. All agents publish th
 Each agent follows a three-phase lifecycle: Register, Work, Handoff.
 
 <p align="center">
-  <img src="docs/diagrams/agent-lifecycle.svg" alt="Agent Session Lifecycle" width="90%">
+  <img src="docs/diagrams/agent-lifecycle.png" alt="Agent Session Lifecycle" width="90%">
 </p>
 
 ### Coordination Schema
