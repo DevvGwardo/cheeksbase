@@ -1,5 +1,9 @@
 # 🔨 Cheeksbase
 
+<p align="center">
+  <img src="docs/repo-banner.png" alt="cheeksbase banner" width="100%">
+</p>
+
 **Agent-first data platform with YAML-only connectors.**
 
 Cheeksbase syncs data from APIs, databases, and files into a unified SQL database (DuckDB), making it easy for AI agents to query and write back to your data sources.
@@ -93,71 +97,9 @@ Start with: cheeksbase init && cheeksbase add stripe --api-key sk_test_... && ch
 
 ## How It Works
 
-```mermaid
-flowchart TB
-    subgraph Sources["🌐 Data Sources"]
-        direction TB
-        API["☁️ REST APIs\nStripe, GitHub, HubSpot"]
-        DB["🗄️ Databases\nPostgres, MySQL"]
-        Files["📁 Files\nCSV, Parquet"]
-        MCP_EXT["🔌 MCP Servers\nExternal tools"]
-    end
-
-    subgraph Config["⚙️ YAML Connectors"]
-        direction TB
-        YAML["📝 Connector Configs\nname, auth, resources"]
-    end
-
-    subgraph Engine["⚡ Cheeksbase Engine"]
-        direction TB
-        Sync["🔄 Sync Engine\nIncremental updates"]
-        DuckDB[("🦆 DuckDB\nUnified SQL")]
-        Cache["💾 Smart Cache\nL1: Memory, L2: Disk"]
-        Query["🔍 Query Engine\nCross-connector joins"]
-        Mutations["✏️ Mutation Engine\nPreview → Confirm"]
-    end
-
-    subgraph Agents["🤖 AI Agents"]
-        direction TB
-        MCP["📡 MCP Server\nquery, describe, sync"]
-        Semantic["🧠 Semantic Agent\nAuto-annotations"]
-        Agent["🤖 Your Agent\nClaude, GPT, etc."]
-    end
-
-    Sources -->|"Add connector"| Config
-    Config -->|"Configure"| Sync
-    Sync -->|"Load data"| DuckDB
-    DuckDB <-->|"Cache hot data"| Cache
-    Query -->|"Read"| DuckDB
-    Mutations -->|"Write locally"| DuckDB
-    Mutations -->|"Push changes"| Sources
-    DuckDB -->|"Expose"| MCP
-    MCP -->|"Tools"| Agent
-    Semantic -->|"Annotate"| DuckDB
-
-    style Sources fill:#e8f4fd,stroke:#3498db,stroke-width:2px,color:#2c3e50
-    style Config fill:#fef9e7,stroke:#f39c12,stroke-width:2px,color:#2c3e50
-    style Engine fill:#eafaf1,stroke:#27ae60,stroke-width:2px,color:#2c3e50
-    style Agents fill:#fdedec,stroke:#e74c3c,stroke-width:2px,color:#2c3e50
-
-    style API fill:#d4e6f1,stroke:#2980b9,color:#2c3e50
-    style DB fill:#d4e6f1,stroke:#2980b9,color:#2c3e50
-    style Files fill:#d4e6f1,stroke:#2980b9,color:#2c3e50
-    style MCP_EXT fill:#d4e6f1,stroke:#2980b9,color:#2c3e50
-
-    style YAML fill:#fdebd0,stroke:#e67e22,color:#2c3e50
-
-    style Sync fill:#d5f5e3,stroke:#27ae60,color:#2c3e50
-    style DuckDB fill:#abebc6,stroke:#1e8449,color:#2c3e50
-    style Cache fill:#d5f5e3,stroke:#27ae60,color:#2c3e50
-    style Query fill:#d5f5e3,stroke:#27ae60,color:#2c3e50
-    style Mutations fill:#d5f5e3,stroke:#27ae60,color:#2c3e50
-
-    style MCP fill:#fadbd8,stroke:#c0392b,color:#2c3e50
-    style Semantic fill:#fadbd8,stroke:#c0392b,color:#2c3e50
-    style Agent fill:#f5b7b1,stroke:#c0392b,color:#2c3e50
-```
-
+<p align="center">
+  <img src="docs/repo-architecture.png" alt="Cheeksbase architecture" width="90%">
+</p>
 ### Data Flow
 
 1. **Connect** — Add data sources with YAML configs (no code needed)
@@ -365,7 +307,121 @@ pytest
 ```
 
 ---
+---
 
+## Multi-Agent Coordination
+
+Cheeksbase is designed as a **shared coordination fabric** for multiple AI agents working on the same project.
+
+Each agent runs as an independent process/profile/session. All agents publish their state to a shared DuckDB-backed coordination bus under the `_cheeksbase` schema.
+
+### Architecture
+
+<p align="center">
+  <img src="docs/diagrams/multi-agent-coordination.png" alt="Multi-Agent Coordination" width="90%">
+</p>
+
+### Agent Session Lifecycle
+
+Each agent follows a three-phase lifecycle: Register, Work, Handoff.
+
+<p align="center">
+  <img src="docs/diagrams/agent-lifecycle.png" alt="Agent Session Lifecycle" width="90%">
+</p>
+
+### Coordination Schema
+
+Three tables under the `_cheeksbase` schema enable agent coordination.
+
+#### agent_runs
+
+One row per live/finished agent run. Tracks identity, status, and progress.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| run_id | string | Unique agent session ID |
+| agent_name | string | Agent identity |
+| profile_name | string | Hermes profile used |
+| workspace_id | string | Project workspace scope |
+| role | string | Agent role (lead, worker, reviewer) |
+| started_at | timestamp | Session start |
+| last_heartbeat_at | timestamp | Last activity ping |
+| status | string | running, completed, failed, interrupted |
+| current_task | string | What the agent is currently doing |
+
+#### agent_events
+
+Append-only event log for auditing and handoff context.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| event_id | string | Unique event ID |
+| run_id | string | Agent session reference |
+| ts | timestamp | Event timestamp |
+| event_type | string | task_completed, blocker, handoff, error |
+| task_id | string | Task reference |
+| file_path | string | File the agent was working on |
+| payload_json | json | Event payload |
+| summary_text | text | Human-readable summary |
+
+#### resource_claims
+
+Leases and ownership for files, tasks, and other resources.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| resource_type | string | file, task, tool, connection |
+| resource_key | string | Unique resource identifier |
+| claimed_by | string | Agent run_id that holds the lease |
+| claimed_at | timestamp | When the lease was acquired |
+| lease_expires_at | timestamp | When the lease auto-expires |
+| status | string | active, released, expired |
+
+### MCP Coordination Tools
+
+Cheeksbase exposes these tools via its MCP server (port 8000):
+
+| Tool | Description |
+|------|-------------|
+| register_agent(name, role, workspace_id) | Register a new agent session |
+| heartbeat(run_id, summary, task_id, progress) | Send periodic heartbeat |
+| post_event(run_id, type, payload) | Log an event |
+| claim_resource(run_id, resource_key, lease_secs) | Acquire a resource lease |
+| release_resource(run_id, resource_key) | Release a resource lease |
+| list_agents(workspace_id) | Discover active agents |
+| get_updates(run_id, since_ts) | Get events since timestamp |
+
+### Coordination Flow
+
+```
+Agent A starts -> register_agent() -> creates row in agent_runs
+Agent A works -> heartbeat() updates last_heartbeat
+              -> post_event() appends to agent_events
+              -> claim_resource() locks files/tasks
+
+Agent B starts -> list_agents() discovers Agent A
+               -> get_updates() reads Agent A events
+               -> claim_resource() requests a resource
+
+Agent A finishes -> release_resource() unlocks
+                 -> mark completed in agent_runs
+                 -> post completion event
+
+Agent B sees -> Agent A completed
+             -> claims resources
+             -> continues work
+```
+
+### Why This Works
+
+- Durable across sessions
+- Queryable with standard SQL
+- Auditable event log
+- Structured data (not /tmp scrapes)
+
+### Caveats
+
+- DuckDB for ~3 local agents
+- Postgres for heavier workloads
+- Status/task bus, not message queue
 ## License
-
-MIT
