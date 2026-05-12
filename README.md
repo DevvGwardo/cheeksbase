@@ -365,7 +365,121 @@ pytest
 ```
 
 ---
+---
 
+## Multi-Agent Coordination
+
+Cheeksbase is designed as a **shared coordination fabric** for multiple AI agents working on the same project.
+
+Each agent runs as an independent process/profile/session. All agents publish their state to a shared DuckDB-backed coordination bus under the `_cheeksbase` schema.
+
+### Architecture
+
+<p align="center">
+  <img src="docs/diagrams/multi-agent-coordination.svg" alt="Multi-Agent Coordination" width="90%">
+</p>
+
+### Agent Session Lifecycle
+
+Each agent follows a three-phase lifecycle: Register, Work, Handoff.
+
+<p align="center">
+  <img src="docs/diagrams/agent-lifecycle.svg" alt="Agent Session Lifecycle" width="90%">
+</p>
+
+### Coordination Schema
+
+Three tables under the `_cheeksbase` schema enable agent coordination.
+
+#### agent_runs
+
+One row per live/finished agent run. Tracks identity, status, and progress.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| run_id | string | Unique agent session ID |
+| agent_name | string | Agent identity |
+| profile_name | string | Hermes profile used |
+| workspace_id | string | Project workspace scope |
+| role | string | Agent role (lead, worker, reviewer) |
+| started_at | timestamp | Session start |
+| last_heartbeat_at | timestamp | Last activity ping |
+| status | string | running, completed, failed, interrupted |
+| current_task | string | What the agent is currently doing |
+
+#### agent_events
+
+Append-only event log for auditing and handoff context.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| event_id | string | Unique event ID |
+| run_id | string | Agent session reference |
+| ts | timestamp | Event timestamp |
+| event_type | string | task_completed, blocker, handoff, error |
+| task_id | string | Task reference |
+| file_path | string | File the agent was working on |
+| payload_json | json | Event payload |
+| summary_text | text | Human-readable summary |
+
+#### resource_claims
+
+Leases and ownership for files, tasks, and other resources.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| resource_type | string | file, task, tool, connection |
+| resource_key | string | Unique resource identifier |
+| claimed_by | string | Agent run_id that holds the lease |
+| claimed_at | timestamp | When the lease was acquired |
+| lease_expires_at | timestamp | When the lease auto-expires |
+| status | string | active, released, expired |
+
+### MCP Coordination Tools
+
+Cheeksbase exposes these tools via its MCP server (port 8000):
+
+| Tool | Description |
+|------|-------------|
+| register_agent(name, role, workspace_id) | Register a new agent session |
+| heartbeat(run_id, summary, task_id, progress) | Send periodic heartbeat |
+| post_event(run_id, type, payload) | Log an event |
+| claim_resource(run_id, resource_key, lease_secs) | Acquire a resource lease |
+| release_resource(run_id, resource_key) | Release a resource lease |
+| list_agents(workspace_id) | Discover active agents |
+| get_updates(run_id, since_ts) | Get events since timestamp |
+
+### Coordination Flow
+
+```
+Agent A starts -> register_agent() -> creates row in agent_runs
+Agent A works -> heartbeat() updates last_heartbeat
+              -> post_event() appends to agent_events
+              -> claim_resource() locks files/tasks
+
+Agent B starts -> list_agents() discovers Agent A
+               -> get_updates() reads Agent A events
+               -> claim_resource() requests a resource
+
+Agent A finishes -> release_resource() unlocks
+                 -> mark completed in agent_runs
+                 -> post completion event
+
+Agent B sees -> Agent A completed
+             -> claims resources
+             -> continues work
+```
+
+### Why This Works
+
+- Durable across sessions
+- Queryable with standard SQL
+- Auditable event log
+- Structured data (not /tmp scrapes)
+
+### Caveats
+
+- DuckDB for ~3 local agents
+- Postgres for heavier workloads
+- Status/task bus, not message queue
 ## License
-
-MIT
