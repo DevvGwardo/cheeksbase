@@ -1,0 +1,249 @@
+{% extends "base.html" %}
+{% block title %}3D graph &mdash; cheeksbase{% endblock %}
+{% block breadcrumb %}
+  <nav class="breadcrumb">
+    <a href="/">data sources</a><span class="sep">/</span><a href="/tasks">cross-agent tasks</a><span class="sep">/</span><strong>3D graph (live Hermes)</strong>
+  </nav>
+{% endblock %}
+{% block content %}
+  <h2>3D agent &amp; task graph &mdash; live Hermes data</h2>
+  <p class="muted">
+    drag to rotate &middot; scroll to zoom &middot; click a task to focus + stream its events
+    <span class="dim">&middot;</span>
+    <a href="/tasks">list view &rarr;</a>
+    <span class="dim">&middot;</span>
+    <a href="/tasks/dag">DAG view &rarr;</a>
+  </p>
+  <p class="muted" style="font-size:.78rem;">
+    source: <code class="inline">{{ hermes_db }}</code>
+  </p>
+
+  <div class="pane" style="padding:0;background:#0a0a0f;border-color:#1f2937;position:relative;">
+    <div id="graph" style="width:100%;height:640px;position:relative;"></div>
+
+    <div id="hud" style="position:absolute;top:0.75rem;right:1rem;font-size:.8rem;color:#9ca3af;font-family:JetBrains Mono,monospace;pointer-events:none;text-align:right;">
+      <span id="hud-counts">loading&hellip;</span><br/>
+      <span id="hud-stream" class="dim">connecting&hellip;</span><br/>
+      <span id="hud-hover" class="dim"></span>
+    </div>
+
+    <aside id="panel" style="position:absolute;top:0;right:0;width:340px;height:100%;background:rgba(10,10,15,0.94);border-left:1px solid #1f2937;color:#e5e7eb;font-size:.85rem;display:none;flex-direction:column;">
+      <header style="padding:.85rem 1rem;border-bottom:1px solid #1f2937;display:flex;justify-content:space-between;align-items:center;gap:.5rem;">
+        <div style="overflow:hidden;">
+          <div id="panel-title" style="font-weight:600;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;"></div>
+          <div id="panel-meta" class="dim" style="font-size:.72rem;margin-top:.15rem;color:#9ca3af;"></div>
+        </div>
+        <button id="panel-close" style="background:none;border:1px solid #374151;color:#9ca3af;border-radius:3px;padding:.15rem .5rem;cursor:pointer;">&times;</button>
+      </header>
+      <div id="panel-events" style="flex:1;overflow-y:auto;padding:.5rem 0;font-family:JetBrains Mono,monospace;font-size:.78rem;line-height:1.5;"></div>
+      <footer class="dim" style="padding:.5rem 1rem;border-top:1px solid #1f2937;font-size:.72rem;color:#9ca3af;">
+        <span id="panel-stream">streaming&hellip;</span>
+      </footer>
+    </aside>
+  </div>
+
+  <p class="muted" style="margin-top:1rem;font-size:.85rem;">
+    <span style="display:inline-block;width:.6rem;height:.6rem;background:#06b6d4;border-radius:50%;vertical-align:middle;"></span> agent (Hermes profile)
+    <span class="dim">&middot;</span>
+    <span style="display:inline-block;width:.6rem;height:.6rem;background:#9ca3af;border-radius:50%;vertical-align:middle;"></span> todo
+    <span style="display:inline-block;width:.6rem;height:.6rem;background:#60a5fa;border-radius:50%;vertical-align:middle;"></span> ready
+    <span style="display:inline-block;width:.6rem;height:.6rem;background:#f59e0b;border-radius:50%;vertical-align:middle;"></span> running
+    <span style="display:inline-block;width:.6rem;height:.6rem;background:#22c55e;border-radius:50%;vertical-align:middle;"></span> done
+    <span style="display:inline-block;width:.6rem;height:.6rem;background:#fb7185;border-radius:50%;vertical-align:middle;"></span> blocked
+    <span class="dim">&middot;</span>
+    <span style="color:#cbd5e1;">&mdash;</span> depends_on
+    <span class="dim">&middot;</span>
+    <span style="color:#3b82f6;">&mdash;</span> assigned_to
+    <span class="dim">&middot;</span>
+    <span style="color:#f59e0b;">&mdash;</span> running
+  </p>
+
+  <script src="https://cdn.jsdelivr.net/npm/3d-force-graph@1.73.4/dist/3d-force-graph.min.js"></script>
+  <script>
+    (async function () {
+      const container = document.getElementById('graph');
+      const hudCounts = document.getElementById('hud-counts');
+      const hudStream = document.getElementById('hud-stream');
+      const hudHover  = document.getElementById('hud-hover');
+      const panel     = document.getElementById('panel');
+      const panelTitle = document.getElementById('panel-title');
+      const panelMeta  = document.getElementById('panel-meta');
+      const panelEvents = document.getElementById('panel-events');
+      const panelStream = document.getElementById('panel-stream');
+      document.getElementById('panel-close').onclick = () => closePanel();
+
+      const KIND_COLOR = {
+        spawned:   '#a78bfa',
+        claimed:   '#60a5fa',
+        crashed:   '#ef4444',
+        completed: '#22c55e',
+        created:   '#9ca3af',
+        assigned:  '#3b82f6',
+        heartbeat: '#06b6d4',
+        progress:  '#f59e0b',
+      };
+      const STATUS_COLOR = {
+        todo:'#9ca3af', triage:'#a78bfa', ready:'#60a5fa',
+        running:'#f59e0b', blocked:'#fb7185', done:'#22c55e',
+        archived:'#6b7280', failed:'#ef4444',
+      };
+
+      const res = await fetch('/graph/data');
+      const data = await res.json();
+      const cursor0 = data.cursor || 0;
+
+      const nodeById = new Map(data.nodes.map(n => [n.id, n]));
+      const taskCount  = data.nodes.filter(n => n.type === 'task').length;
+      const agentCount = data.nodes.filter(n => n.type === 'agent').length;
+      hudCounts.textContent =
+        `${taskCount} task${taskCount === 1 ? '' : 's'} · ` +
+        `${agentCount} agent${agentCount === 1 ? '' : 's'} · ` +
+        `${data.links.length} edge${data.links.length === 1 ? '' : 's'} · cursor ${cursor0}`;
+
+      const Graph = ForceGraph3D()(container)
+        .backgroundColor('#0a0a0f')
+        .nodeColor(n => n.color)
+        .nodeVal('val')
+        .nodeLabel(n =>
+          n.type === 'task'
+            ? `<strong>${escapeHtml(n.name)}</strong><br/><span style="color:#94a3b8">status: ${n.status}</span>`
+            : `<strong>${escapeHtml(n.name)}</strong><br/><span style="color:#94a3b8">${escapeHtml(n.role || 'agent')}</span>`
+        )
+        .linkColor(l => l.color)
+        .linkOpacity(0.55)
+        .linkWidth(0.5)
+        .linkDirectionalArrowLength(3)
+        .linkDirectionalArrowRelPos(1)
+        .linkDirectionalParticles(l => (l.type === 'depends_on' ? 2 : (l.type === 'running' ? 4 : 0)))
+        .linkDirectionalParticleSpeed(0.005)
+        .onNodeHover(n => {
+          hudHover.textContent = n
+            ? (n.type === 'task' ? `▶ ${n.name} [${n.status}]` : `● ${n.name}`)
+            : '';
+        })
+        .onNodeClick(n => {
+          flyTo(n);
+          if (n.type === 'task') openPanel(n);
+        })
+        .graphData(data);
+
+      Graph.width(container.clientWidth).height(640);
+      window.addEventListener('resize', () => Graph.width(container.clientWidth).height(640));
+
+      function flyTo(n) {
+        const d = 80;
+        const dr = 1 + d / Math.hypot(n.x || 1, n.y || 1, n.z || 1);
+        Graph.cameraPosition(
+          { x: (n.x || 0) * dr, y: (n.y || 0) * dr, z: (n.z || 0) * dr },
+          n,
+          900
+        );
+      }
+
+      // ── PANEL: per-task event log + per-task SSE stream ──────────────
+      let activeTaskId = null;
+      let panelStreamES = null;
+
+      async function openPanel(task) {
+        activeTaskId = task.id;
+        panelTitle.textContent = task.name;
+        panelMeta.textContent = `${task.id} · ${task.status}`;
+        panelEvents.innerHTML = '<div class="dim" style="padding:.5rem 1rem;color:#9ca3af;">loading history&hellip;</div>';
+        panel.style.display = 'flex';
+
+        try {
+          const r = await fetch(`/graph/task/${task.id}`);
+          const detail = await r.json();
+          panelEvents.innerHTML = '';
+          for (const evt of detail.events) appendEvent(evt);
+          panelEvents.scrollTop = panelEvents.scrollHeight;
+        } catch (e) {
+          panelEvents.innerHTML = `<div class="dim" style="padding:.5rem 1rem;color:#ef4444;">error: ${escapeHtml(e.message)}</div>`;
+        }
+
+        // task-scoped live stream
+        if (panelStreamES) panelStreamES.close();
+        const cursor = await currentCursor();
+        panelStreamES = new EventSource(`/graph/stream?task_id=${encodeURIComponent(task.id)}&since_id=${cursor}`);
+        panelStream.textContent = `streaming events for ${task.id}`;
+        panelStreamES.addEventListener('task_event', (ev) => {
+          const evt = JSON.parse(ev.data);
+          if (evt.task_id !== activeTaskId) return;
+          appendEvent(evt, true);
+          panelEvents.scrollTop = panelEvents.scrollHeight;
+        });
+        panelStreamES.addEventListener('error', () => {
+          panelStream.textContent = 'stream error · reconnecting…';
+        });
+      }
+
+      function closePanel() {
+        panel.style.display = 'none';
+        activeTaskId = null;
+        if (panelStreamES) { panelStreamES.close(); panelStreamES = null; }
+        panelStream.textContent = 'idle';
+      }
+
+      function appendEvent(evt, fresh) {
+        const color = KIND_COLOR[evt.kind] || '#9ca3af';
+        const ts = new Date((evt.created_at || 0) * 1000).toISOString().slice(11, 19);
+        const row = document.createElement('div');
+        row.style.cssText = 'padding:.25rem 1rem;border-left:3px solid ' + color + ';margin:.15rem 0;';
+        row.innerHTML =
+          `<span style="color:${color};font-weight:600;">${escapeHtml(evt.kind)}</span> ` +
+          `<span class="dim" style="color:#9ca3af;">${ts}</span>` +
+          (evt.run_id ? ` <span class="dim" style="color:#6b7280;">run=${evt.run_id}</span>` : '');
+        if (fresh) {
+          row.style.background = 'rgba(245,158,11,0.18)';
+          row.style.transition = 'background 1.5s';
+          setTimeout(() => { row.style.background = 'transparent'; }, 50);
+        }
+        panelEvents.appendChild(row);
+      }
+
+      async function currentCursor() {
+        const r = await fetch('/graph/data');
+        const d = await r.json();
+        return d.cursor || 0;
+      }
+
+      // ── GLOBAL STREAM: pulse nodes when ANY event fires ───────────────
+      const globalES = new EventSource(`/graph/stream?since_id=${cursor0}`);
+      hudStream.textContent = 'live stream open';
+      globalES.addEventListener('task_event', (ev) => {
+        const evt = JSON.parse(ev.data);
+        const node = nodeById.get(evt.task_id);
+        if (!node) return;
+        pulseNode(node, KIND_COLOR[evt.kind] || '#f59e0b');
+        hudStream.textContent = `last: ${evt.kind} on ${evt.task_id.slice(0,8)}`;
+      });
+      globalES.addEventListener('error', () => {
+        hudStream.textContent = 'stream error · reconnecting…';
+      });
+
+      function pulseNode(node, color) {
+        const original = node.color;
+        const originalVal = node.val;
+        node.color = color;
+        node.val = (originalVal || 5) * 2.4;
+        Graph.refresh();
+        setTimeout(() => {
+          // restore — task nodes keep status color, agents stay cyan
+          if (node.type === 'task') {
+            node.color = STATUS_COLOR[node.status] || '#9ca3af';
+          } else {
+            node.color = '#06b6d4';
+          }
+          node.val = originalVal;
+          Graph.refresh();
+        }, 1100);
+      }
+
+      function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, c =>
+          ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])
+        );
+      }
+    })();
+  </script>
+{% endblock %}

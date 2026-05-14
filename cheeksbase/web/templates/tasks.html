@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% block title %}cross-agent tasks &mdash; cheeksbase{% endblock %}
+{% block breadcrumb %}
+  <nav class="breadcrumb">
+    <a href="/">data sources</a><span class="sep">/</span><strong>cross-agent tasks</strong>
+  </nav>
+{% endblock %}
+{% block content %}
+  <h2>Cross-agent tasks</h2>
+  <p class="muted">
+    {{ counts.pending }} pending
+    <span class="dim">&middot;</span>
+    {{ counts.running }} running
+    <span class="dim">&middot;</span>
+    {{ counts.done }} done
+    <span class="dim">&middot;</span>
+    {{ counts.failed }} failed
+    <span class="dim">&middot;</span>
+    <a href="/tasks/dag">DAG view &rarr;</a>
+    <span class="dim">&middot;</span>
+    <a href="/graph">3D graph &rarr;</a>
+  </p>
+
+  <div class="pane">
+    <form method="get" action="/tasks" style="display:flex;gap:.75rem;flex-wrap:wrap;align-items:end;">
+      <label style="display:flex;flex-direction:column;font-size:.85rem;color:var(--fg-dim);">
+        team_id
+        <input type="text" name="team_id" value="{{ filter_team_id }}" placeholder="any" />
+      </label>
+      <label style="display:flex;flex-direction:column;font-size:.85rem;color:var(--fg-dim);">
+        status
+        <select name="status">
+          <option value="" {% if not filter_status %}selected{% endif %}>any</option>
+          {% for s in ["pending", "running", "done", "failed"] %}
+            <option value="{{ s }}" {% if filter_status == s %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label style="display:flex;flex-direction:column;font-size:.85rem;color:var(--fg-dim);">
+        target_agent
+        <input type="text" name="target_agent" value="{{ filter_target_agent }}" placeholder="any" />
+      </label>
+      <button type="submit" class="btn">filter</button>
+      <a href="/tasks" class="btn">reset</a>
+    </form>
+  </div>
+
+  {% if not tasks %}
+    <div class="pane empty">
+      <p><strong class="muted">No tasks yet.</strong></p>
+      <p class="dim">create one below or call <code class="inline">create_task</code> via MCP.</p>
+    </div>
+  {% else %}
+    <div class="pane">
+      <table>
+        <thead>
+          <tr>
+            <th>id</th>
+            <th>title</th>
+            <th>team</th>
+            <th>source &rarr; target</th>
+            <th>depends on</th>
+            <th>status</th>
+            <th>created</th>
+            <th>actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for t in tasks %}
+            <tr>
+              <td><code class="inline">{{ t.id }}</code></td>
+              <td>
+                <strong>{{ t.title }}</strong>
+                {% if t.description %}<br/><span class="muted">{{ t.description }}</span>{% endif %}
+                {% if t.acceptance_criteria %}<br/><span class="dim">accept: {{ t.acceptance_criteria }}</span>{% endif %}
+              </td>
+              <td>{{ t.team_id or "&mdash;" | safe }}</td>
+              <td>
+                <span class="muted">{{ t.source_agent or "?" }}</span>
+                <span class="dim">&rarr;</span>
+                <strong>{{ t.target_agent or "unassigned" }}</strong>
+              </td>
+              <td>
+                {% if t.depends_on %}
+                  {% for d in t.depends_on %}<code class="inline">{{ d }}</code>{% if not loop.last %}<br/>{% endif %}{% endfor %}
+                {% else %}
+                  <span class="dim">&mdash;</span>
+                {% endif %}
+              </td>
+              <td>
+                <span class="pill {% if t.status == 'done' %}fresh{% elif t.status == 'failed' %}stale{% elif t.status == 'running' %}fresh{% else %}unsynced{% endif %}">{{ t.status }}</span>
+              </td>
+              <td class="muted">{{ t.created_at }}</td>
+              <td>
+                <form method="post" action="/tasks/{{ t.id }}/status" style="display:inline;">
+                  <select name="status" onchange="this.form.submit()">
+                    {% for s in ["pending", "running", "done", "failed"] %}
+                      <option value="{{ s }}" {% if t.status == s %}selected{% endif %}>{{ s }}</option>
+                    {% endfor %}
+                  </select>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+
+  <h3 style="margin-top:2rem;">New task</h3>
+  <div class="pane">
+    <form method="post" action="/tasks/create" style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem;">
+      <label style="display:flex;flex-direction:column;font-size:.85rem;color:var(--fg-dim);grid-column:1/-1;">
+        title <small class="dim">(required)</small>
+        <input type="text" name="title" required placeholder="Implement /api/teams" />
+      </label>
+      <label style="display:flex;flex-direction:column;font-size:.85rem;color:var(--fg-dim);grid-column:1/-1;">
+        description
+        <textarea name="description" rows="2" placeholder="Optional longer context"></textarea>
+      </label>
+      <label style="display:flex;flex-direction:column;font-size:.85rem;color:var(--fg-dim);">
+        team_id
+        <input type="text" name="team_id" placeholder="team-ai-os" />
+      </label>
+      <label style="display:flex;flex-direction:column;font-size:.85rem;color:var(--fg-dim);">
+        source_agent
+        <input type="text" name="source_agent" placeholder="planner-1" />
+      </label>
+      <label style="display:flex;flex-direction:column;font-size:.85rem;color:var(--fg-dim);">
+        target_agent
+        <input type="text" name="target_agent" placeholder="builder-1" />
+      </label>
+      <label style="display:flex;flex-direction:column;font-size:.85rem;color:var(--fg-dim);">
+        depends_on <small class="dim">(comma-separated task ids)</small>
+        <input type="text" name="depends_on" placeholder="task_abc, task_def" />
+      </label>
+      <label style="display:flex;flex-direction:column;font-size:.85rem;color:var(--fg-dim);grid-column:1/-1;">
+        acceptance_criteria
+        <input type="text" name="acceptance_criteria" placeholder="Endpoints respond 200 + tests pass" />
+      </label>
+      <div style="grid-column:1/-1;">
+        <button type="submit" class="btn primary">create task</button>
+      </div>
+    </form>
+  </div>
+{% endblock %}

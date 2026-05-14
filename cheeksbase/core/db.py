@@ -216,6 +216,22 @@ CREATE TABLE IF NOT EXISTS {META_SCHEMA}.resource_claims (
     metadata_json JSON
 );
 
+CREATE TABLE IF NOT EXISTS {META_SCHEMA}.cross_agent_tasks (
+    id VARCHAR PRIMARY KEY,
+    team_id VARCHAR,
+    title VARCHAR NOT NULL,
+    description VARCHAR,
+    source_agent VARCHAR,
+    target_agent VARCHAR,
+    depends_on VARCHAR,
+    status VARCHAR DEFAULT 'pending',
+    acceptance_criteria VARCHAR,
+    result_json JSON,
+    created_at TIMESTAMP DEFAULT current_timestamp,
+    updated_at TIMESTAMP DEFAULT current_timestamp,
+    completed_at TIMESTAMP
+);
+
 CREATE OR REPLACE VIEW {META_SCHEMA}.active_agent_runs AS
 SELECT *
 FROM {META_SCHEMA}.agent_runs
@@ -238,6 +254,21 @@ CREATE INDEX IF NOT EXISTS idx_agent_events_run_ts
 
 CREATE INDEX IF NOT EXISTS idx_resource_claims_workspace_status
     ON {META_SCHEMA}.resource_claims(workspace_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_cross_agent_tasks_team_status
+    ON {META_SCHEMA}.cross_agent_tasks(team_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_cross_agent_tasks_target_status
+    ON {META_SCHEMA}.cross_agent_tasks(target_agent, status);
+
+CREATE INDEX IF NOT EXISTS idx_shared_memory_scope_ts
+    ON {META_SCHEMA}.shared_memory(scope, updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_shared_memory_tags
+    ON {META_SCHEMA}.shared_memory(tags);
+
+CREATE INDEX IF NOT EXISTS idx_shared_memory_expires
+    ON {META_SCHEMA}.shared_memory(expires_at);
 """
 
 
@@ -256,6 +287,7 @@ _META_TABLES = [
     "agent_runs",
     "agent_events",
     "resource_claims",
+    "cross_agent_tasks",
 ]
 
 
@@ -299,6 +331,13 @@ class CheeksbaseDB:
                 self.conn.execute(col_sql)
             except duckdb.CatalogException:
                 pass  # Column already exists (older DuckDB without IF NOT EXISTS)
+
+        # Auto-cleanup expired entries on startup
+        try:
+            self.shared_cleanup_expired()
+            self.cleanup_stale_cache()
+        except Exception:
+            pass  # Graceful degradation if cleanup fails
 
     def execute(self, sql: str, params: Sequence[Any] | None = None) -> duckdb.DuckDBPyConnection:
         """Execute a SQL query and return the connection for chaining."""
@@ -623,8 +662,11 @@ class CheeksbaseDB:
         scope: str = "broadcast",
         tags: str | None = None,
         expires_at: str | None = None,
+        embedding: list[float] | None = None,
     ) -> dict[str, Any]:
-        """Insert or update a shared memory entry. Returns the stored row as dict."""
+        """Insert or update a shared memory entry. Returns the stored row as dict.
+        If *embedding* is provided, it is stored alongside the entry.
+        """
         self.execute(
             f"INSERT INTO {META_SCHEMA}.shared_memory "
             f"(source_agent, scope, key, value, tags, expires_at) "
@@ -638,6 +680,8 @@ class CheeksbaseDB:
             f"  updated_at = now()",
             [source_agent, scope, key, value, tags, expires_at],
         )
+        if embedding is not None:
+            self.store_shared_embedding(key, embedding)
         rows = self.query(
             f"SELECT * FROM {META_SCHEMA}.shared_memory WHERE key = ?", [key]
         )
@@ -722,6 +766,26 @@ class CheeksbaseDB:
         )
         return True
 
+    def store_embeddings_for_all(self, embed_func) -> int:
+        """Generate and store embeddings for entries that don't have them.
+
+        *embed_func* is a callable that takes (key, value, tags) and returns
+        list[float]. Returns count of entries updated.
+        """
+        entries = self.query(
+            f"SELECT key, value, tags FROM {META_SCHEMA}.shared_memory "
+            f"WHERE embedding IS NULL"
+        )
+        count = 0
+        for entry in entries:
+            try:
+                emb = embed_func(entry["key"], entry["value"], entry["tags"])
+                self.store_shared_embedding(entry["key"], emb)
+                count += 1
+            except Exception:
+                continue
+        return count
+
     def search_shared_semantic(
         self, embedding: list[float], limit: int = 10
     ) -> list[dict[str, Any]]:
@@ -751,6 +815,19 @@ class CheeksbaseDB:
         self.execute(
             f"DELETE FROM {META_SCHEMA}.shared_memory "
             f"WHERE expires_at IS NOT NULL AND expires_at < current_timestamp"
+        )
+        return count
+
+    def cleanup_stale_cache(self) -> int:
+        """Remove expired query cache entries. Returns count deleted."""
+        count_rows = self.query(
+            f"SELECT COUNT(*) as cnt FROM {META_SCHEMA}.query_cache "
+            f"WHERE expires_at < current_timestamp"
+        )
+        count = count_rows[0]["cnt"] if count_rows else 0
+        self.execute(
+            f"DELETE FROM {META_SCHEMA}.query_cache "
+            f"WHERE expires_at < current_timestamp"
         )
         return count
 
@@ -1027,6 +1104,124 @@ class CheeksbaseDB:
             "agents": self.list_agent_runs(workspace_id=workspace_id),
             "events": events,
             "claims": claims,
+        }
+
+    # ── Cross-Agent Tasks ─────────────────────────────────────────────────
+
+    def create_cross_agent_task(
+        self,
+        title: str,
+        source_agent: str | None = None,
+        target_agent: str | None = None,
+        team_id: str | None = None,
+        description: str | None = None,
+        depends_on: Sequence[str] | None = None,
+        acceptance_criteria: str | None = None,
+    ) -> str:
+        """Create a cross-agent task and return its task id."""
+        task_id = f"task_{uuid.uuid4().hex[:12]}"
+        depends_on_str = ",".join(depends_on) if depends_on else None
+        self.conn.execute(
+            f"INSERT INTO {META_SCHEMA}.cross_agent_tasks "
+            "(id, team_id, title, description, source_agent, target_agent, "
+            "depends_on, status, acceptance_criteria) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+            [
+                task_id,
+                team_id,
+                title,
+                description,
+                source_agent,
+                target_agent,
+                depends_on_str,
+                acceptance_criteria,
+            ],
+        )
+        return task_id
+
+    def get_cross_agent_task(self, task_id: str) -> dict[str, Any] | None:
+        """Fetch a single cross-agent task by id."""
+        rows = self.query(
+            f"SELECT * FROM {META_SCHEMA}.cross_agent_tasks WHERE id = ?",
+            [task_id],
+        )
+        if not rows:
+            return None
+        return self._hydrate_cross_agent_task(rows[0])
+
+    def update_cross_agent_task(
+        self,
+        task_id: str,
+        status: str | None = None,
+        target_agent: str | None = None,
+        result: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Partial update of a cross-agent task. Sets completed_at on terminal status."""
+        existing = self.get_cross_agent_task(task_id)
+        if existing is None:
+            return {"error": f"Unknown task_id: {task_id}"}
+
+        result_json = json.dumps(result) if result is not None else None
+        terminal = status in ("done", "failed")
+
+        self.conn.execute(
+            f"UPDATE {META_SCHEMA}.cross_agent_tasks SET "
+            "status = COALESCE(?, status), "
+            "target_agent = COALESCE(?, target_agent), "
+            "result_json = COALESCE(?, result_json), "
+            "updated_at = current_timestamp, "
+            "completed_at = CASE WHEN ? THEN current_timestamp ELSE completed_at END "
+            "WHERE id = ?",
+            [status, target_agent, result_json, terminal, task_id],
+        )
+        return self.get_cross_agent_task(task_id) or {"error": f"Unknown task_id: {task_id}"}
+
+    def list_cross_agent_tasks(
+        self,
+        team_id: str | None = None,
+        status: str | None = None,
+        target_agent: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """List cross-agent tasks with optional filters."""
+        sql = f"SELECT * FROM {META_SCHEMA}.cross_agent_tasks WHERE 1 = 1"
+        params: list[Any] = []
+        if team_id is not None:
+            sql += " AND team_id = ?"
+            params.append(team_id)
+        if status is not None:
+            sql += " AND status = ?"
+            params.append(status)
+        if target_agent is not None:
+            sql += " AND target_agent = ?"
+            params.append(target_agent)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        rows = self.query(sql, params)
+        return [self._hydrate_cross_agent_task(row) for row in rows]
+
+    @staticmethod
+    def _hydrate_cross_agent_task(row: dict[str, Any]) -> dict[str, Any]:
+        """Parse depends_on and result_json into native types."""
+        depends_on = row.get("depends_on")
+        row["depends_on"] = (
+            [d for d in depends_on.split(",") if d] if depends_on else []
+        )
+        result_json = row.pop("result_json", None)
+        row["result"] = json.loads(result_json) if result_json else None
+        return row
+
+    def vacuum(self) -> dict[str, Any]:
+        """Reclaim storage bloat by running VACUUM and ANALYZE."""
+        before = Path(self.db_path).stat().st_size
+        self.conn.execute("VACUUM;")
+        self.conn.execute("ANALYZE;")
+        after = Path(self.db_path).stat().st_size
+        return {
+            "status": "ok",
+            "before_bytes": before,
+            "after_bytes": after,
+            "reclaimed_bytes": before - after,
         }
 
     def close(self) -> None:

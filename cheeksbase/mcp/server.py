@@ -160,6 +160,31 @@ def _dispatch_chain_call(tool_name: str, args: dict[str, Any]) -> dict[str, Any]
     if tool_name == "get_updates":
         return {"tool": tool_name, "result": json.loads(get_updates(**args))}
 
+    # Shared memory tools (both old and new names)
+    if tool_name in ("remember_shared", "remember_memory"):
+        return {"tool": tool_name, "result": json.loads(remember_memory(**args))}
+
+    if tool_name in ("recall_shared", "recall_memory"):
+        return {"tool": tool_name, "result": json.loads(recall_memory(**args))}
+
+    if tool_name in ("forget_shared", "forget_memory"):
+        return {"tool": tool_name, "result": json.loads(forget_memory(**args))}
+
+    if tool_name in ("search_shared", "search_memories"):
+        return {"tool": tool_name, "result": json.loads(search_memories(**args))}
+
+    if tool_name == "recall_all_shared":
+        return {"tool": tool_name, "result": json.loads(recall_all_shared(**args))}
+
+    if tool_name == "embed_shared":
+        return {"tool": tool_name, "result": json.loads(embed_shared(**args))}
+
+    if tool_name == "search_shared_semantic":
+        return {"tool": tool_name, "result": json.loads(search_shared_semantic(**args))}
+
+    if tool_name == "run_maintenance":
+        return {"tool": tool_name, "result": json.loads(run_maintenance(**args))}
+
     return {"tool": tool_name, "error": f"Unknown tool: {tool_name}"}
 
 
@@ -413,6 +438,76 @@ def get_updates(
     return json.dumps(result, indent=2, default=str)
 
 
+def create_task(
+    title: Annotated[str, Field(description="Short task title")],
+    source_agent: Annotated[str | None, Field(description="Agent that created this task")] = None,
+    target_agent: Annotated[str | None, Field(description="Agent expected to execute the task")] = None,
+    team_id: Annotated[str | None, Field(description="Team identifier scoping the task")] = None,
+    description: Annotated[str | None, Field(description="Longer task description")] = None,
+    depends_on: Annotated[str | None, Field(description="Comma-separated upstream task ids this task waits on")] = None,
+    acceptance_criteria: Annotated[str | None, Field(description="What 'done' looks like for this task")] = None,
+) -> str:
+    """Create a cross-agent task in the shared task queue."""
+    db = _get_db()
+    deps = [d.strip() for d in depends_on.split(",") if d.strip()] if depends_on else None
+    task_id = db.create_cross_agent_task(
+        title=title,
+        source_agent=source_agent,
+        target_agent=target_agent,
+        team_id=team_id,
+        description=description,
+        depends_on=deps,
+        acceptance_criteria=acceptance_criteria,
+    )
+    return json.dumps({"status": "created", "task_id": task_id}, indent=2, default=str)
+
+
+def get_task(
+    task_id: Annotated[str, Field(description="Task id returned by create_task")],
+) -> str:
+    """Fetch a single cross-agent task by id."""
+    db = _get_db()
+    result = db.get_cross_agent_task(task_id)
+    if result is None:
+        return json.dumps({"error": f"Unknown task_id: {task_id}"}, indent=2)
+    return json.dumps(result, indent=2, default=str)
+
+
+def update_task(
+    task_id: Annotated[str, Field(description="Task id returned by create_task")],
+    status: Annotated[str | None, Field(description="New status: pending, running, done, failed")] = None,
+    target_agent: Annotated[str | None, Field(description="Reassign to a different target agent")] = None,
+    result_json: Annotated[str | None, Field(description="Optional JSON result payload string")] = None,
+) -> str:
+    """Update a cross-agent task — status, assignment, or result payload."""
+    db = _get_db()
+    result_obj = json.loads(result_json) if result_json else None
+    updated = db.update_cross_agent_task(
+        task_id=task_id,
+        status=status,
+        target_agent=target_agent,
+        result=result_obj,
+    )
+    return json.dumps(updated, indent=2, default=str)
+
+
+def list_tasks(
+    team_id: Annotated[str | None, Field(description="Filter by team id")] = None,
+    status: Annotated[str | None, Field(description="Filter by status: pending, running, done, failed")] = None,
+    target_agent: Annotated[str | None, Field(description="Filter by assigned target agent")] = None,
+    limit: Annotated[int, Field(description="Max tasks to return", ge=1, le=1000)] = 200,
+) -> str:
+    """List cross-agent tasks with optional filters."""
+    db = _get_db()
+    tasks = db.list_cross_agent_tasks(
+        team_id=team_id,
+        status=status,
+        target_agent=target_agent,
+        limit=limit,
+    )
+    return json.dumps({"tasks": tasks}, indent=2, default=str)
+
+
 def annotate(
     target: Annotated[str, Field(description="Target to annotate: 'schema.table' or 'schema.table.column'")],
     key: Annotated[str, Field(description="Annotation key: 'description', 'note', 'pii', 'deprecated', 'owner', etc.")],
@@ -576,6 +671,74 @@ def embed_shared(
     db.store_shared_embedding(key, embedding)
     return json.dumps({"status": "embedded", "key": key, "dimensions": len(embedding)})
 
+
+# ── Aliased Memory Tools (shorter alternative names) ───────────────────────
+
+
+def remember_memory(
+    key: Annotated[str, Field(description="Stable, descriptive key for the memory")],
+    value: Annotated[str, Field(description="The memory content")],
+    source_agent: Annotated[str, Field(description="Agent storing this memory")] = "hermes",
+    scope: Annotated[str, Field(description="Visibility: broadcast, topic, or targeted")] = "broadcast",
+    tags: Annotated[str | None, Field(description="Comma-separated tags for search")] = None,
+    expires_at: Annotated[str | None, Field(description="Optional ISO timestamp for expiry")] = None,
+    embedding_json: Annotated[str | None, Field(description="Optional JSON array of floats for vector search")] = None,
+) -> str:
+    """Store a durable memory in the shared memory store."""
+    db = _get_db()
+    embedding = json.loads(embedding_json) if embedding_json else None
+    result = db.shared_remember(
+        source_agent=source_agent,
+        key=key,
+        value=value,
+        scope=scope,
+        tags=tags,
+        expires_at=expires_at,
+        embedding=embedding,
+    )
+    return json.dumps(result, indent=2, default=str)
+
+
+def search_memories(
+    query: Annotated[str, Field(description="Search term to find in keys, values, or tags")],
+    limit: Annotated[int, Field(description="Max results", ge=1, le=100)] = 10,
+) -> str:
+    """Search shared memories by keyword across keys, values, and tags. Uses ILIKE with optional vector fallback."""
+    db = _get_db()
+    results = db.shared_search(query=query, limit=limit)
+    return json.dumps({"results": results, "count": len(results)}, indent=2, default=str)
+
+
+def recall_memory(
+    key: Annotated[str, Field(description="Exact memory key to recall")],
+) -> str:
+    """Recall a specific memory by its exact key."""
+    db = _get_db()
+    result = db.shared_recall(key=key)
+    if result is None:
+        return json.dumps({"error": f"Memory key '{key}' not found"}, indent=2)
+    return json.dumps(result, indent=2, default=str)
+
+
+def forget_memory(
+    key: Annotated[str, Field(description="Memory key to delete")],
+) -> str:
+    """Delete a memory by its exact key."""
+    db = _get_db()
+    db.shared_forget(key=key)
+    return json.dumps({"status": "forgotten", "key": key}, indent=2)
+
+
+def run_maintenance() -> str:
+    """Run database maintenance: cleanup expired memories, stale cache, and VACUUM."""
+    db = _get_db()
+    results: dict[str, Any] = {}
+    results["expired_cleaned"] = db.shared_cleanup_expired()
+    results["stale_cache_cleaned"] = db.cleanup_stale_cache()
+    results["vacuum"] = db.vacuum()
+    return json.dumps(results, indent=2, default=str)
+
+
 def create_server() -> FastMCP:
     """Create the FastMCP server."""
     # Build initial instructions
@@ -605,10 +768,14 @@ def create_server() -> FastMCP:
     server.add_tool(release_resource, name="release_resource")
     server.add_tool(list_agents, name="list_agents")
     server.add_tool(get_updates, name="get_updates")
+    server.add_tool(create_task, name="create_task")
+    server.add_tool(get_task, name="get_task")
+    server.add_tool(update_task, name="update_task")
+    server.add_tool(list_tasks, name="list_tasks")
     server.add_tool(annotate, name="annotate")
     server.add_tool(chain, name="chain")
 
-    # Shared memory tools
+    # Shared memory tools (original names)
     server.add_tool(remember_shared, name="remember_shared")
     server.add_tool(recall_shared, name="recall_shared")
     server.add_tool(recall_all_shared, name="recall_all_shared")
@@ -616,6 +783,12 @@ def create_server() -> FastMCP:
     server.add_tool(search_shared, name="search_shared")
     server.add_tool(embed_shared, name="embed_shared")
 
+    # Aliased memory tools (alternative names)
+    server.add_tool(remember_memory, name="remember_memory")
+    server.add_tool(recall_memory, name="recall_memory")
+    server.add_tool(forget_memory, name="forget_memory")
+    server.add_tool(search_memories, name="search_memories")
+    server.add_tool(run_maintenance, name="run_maintenance")
 
     return server
 

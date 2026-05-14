@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}task DAG &mdash; cheeksbase{% endblock %}
+{% block breadcrumb %}
+  <nav class="breadcrumb">
+    <a href="/">data sources</a><span class="sep">/</span><a href="/tasks">cross-agent tasks</a><span class="sep">/</span><strong>DAG</strong>
+  </nav>
+{% endblock %}
+{% block content %}
+  <h2>Cross-agent task DAG</h2>
+  <p class="muted">
+    {{ task_count }} task{{ "" if task_count == 1 else "s" }}
+    <span class="dim">&middot;</span>
+    {{ counts.pending }} pending
+    <span class="dim">&middot;</span>
+    {{ counts.running }} running
+    <span class="dim">&middot;</span>
+    {{ counts.done }} done
+    <span class="dim">&middot;</span>
+    {{ counts.failed }} failed
+    <span class="dim">&middot;</span>
+    <a href="/tasks">list view &rarr;</a>
+    <span class="dim">&middot;</span>
+    <a href="/graph">3D graph &rarr;</a>
+  </p>
+
+  {% if task_count == 0 %}
+    <div class="pane empty">
+      <p><strong class="muted">No tasks yet.</strong></p>
+      <p class="dim">create one from <a href="/tasks">/tasks</a> to see it appear here.</p>
+    </div>
+  {% else %}
+    <div class="pane" style="padding:1rem;background:#fff;">
+      <pre class="mermaid">{{ mermaid_src | safe }}</pre>
+    </div>
+
+    <p class="muted" style="margin-top:1rem;font-size:.85rem;">
+      <span class="pill unsynced">pending</span>
+      <span class="pill" style="background:#fef3c7;border-color:#d97706;color:#222;">running</span>
+      <span class="pill fresh">done</span>
+      <span class="pill stale">failed</span>
+      <span class="dim">&middot; arrows point from upstream task to dependent task</span>
+    </p>
+  {% endif %}
+
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+    mermaid.initialize({ startOnLoad: true, theme: "neutral", securityLevel: "loose" });
+  </script>
+{% endblock %}
