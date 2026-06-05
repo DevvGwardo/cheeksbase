@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MRR — Glass KPI Tile</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Geist', system-ui, -apple-system, sans-serif;
+    background: #0e0f14;
+    background-image:
+      radial-gradient(ellipse 80% 60% at 20% 30%, rgba(99,102,241,0.08) 0%, transparent 70%),
+      radial-gradient(ellipse 60% 50% at 80% 70%, rgba(168,85,247,0.06) 0%, transparent 60%);
+  }
+
+  /* ======= GLASS KPI TILE (elev-2) ======= */
+  .kpi-tile {
+    position: relative;
+    width: 340px;
+    padding: 24px;
+    border-radius: 16px;
+    overflow: hidden;
+
+    /* Frost body */
+    background: rgba(255,255,255,0.08);
+    backdrop-filter: blur(24px) saturate(150%);
+    -webkit-backdrop-filter: blur(24px) saturate(150%);
+
+    /* Elev-2 tokenized shadow */
+    box-shadow:
+      inset 1px 1px 0 0 rgba(255,255,255,0.20),
+      0 4px 14px -2px rgba(0,0,0,0.22);
+
+    /* Border */
+    border: 1px solid rgba(255,255,255,0.15);
+
+    /* a11y fallback */
+    @supports not (backdrop-filter: blur(24px)) {
+      background: rgba(20,22,30,0.92);
+    }
+  }
+
+  /* Top rim light — edge-bound, single direction */
+  .kpi-tile .rim {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    border-radius: inherit;
+  }
+
+  .kpi-tile .rim::before {
+    content: '';
+    position: absolute;
+    inset-x: 0;
+    top: 0;
+    height: 14%;
+    background-image: linear-gradient(
+      180deg,
+      rgba(255,255,255,0.32) 0%,
+      rgba(255,255,255,0.14) 40%,
+      rgba(255,255,255,0.04) 75%,
+      transparent 100%
+    );
+    pointer-events: none;
+    border-radius: 16px 16px 0 0;
+  }
+
+  /* Inner light — slab thickness */
+  .kpi-tile .inner-light {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    border-radius: inherit;
+    background-image: linear-gradient(
+      180deg,
+      rgba(255,255,255,0.14) 0%,
+      rgba(255,255,255,0.06) 35%,
+      rgba(255,255,255,0.0) 60%,
+      rgba(0,0,0,0.08) 100%
+    );
+  }
+
+  /* Corner glint */
+  .kpi-tile .corner-glint {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    border-radius: inherit;
+    background: radial-gradient(120px 80px at 8% 10%, rgba(255,255,255,0.28), transparent 70%);
+  }
+
+  /* ======= CONTENT ======= */
+  .kpi-content {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  /* Header row: label + period */
+  .kpi-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .kpi-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: rgba(255,255,255,0.75);  /* floor /75 */
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+
+  .kpi-period {
+    font-size: 11px;
+    font-weight: 400;
+    color: rgba(255,255,255,0.55);  /* helper floor /55 */
+    font-family: 'Geist Mono', monospace;
+    letter-spacing: 0.04em;
+  }
+
+  /* Value row */
+  .kpi-value-row {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+
+  .kpi-value {
+    font-family: 'Geist Mono', monospace;
+    font-size: 32px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: #fff;
+    line-height: 1;
+    letter-spacing: -0.02em;
+  }
+
+  .kpi-delta {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-family: 'Geist Mono', monospace;
+    font-size: 13px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    padding: 2px 7px;
+    border-radius: 6px;
+    line-height: 1.3;
+  }
+
+  .kpi-delta.positive {
+    color: #4ade80;
+    background: rgba(74,222,128,0.12);
+  }
+
+  .kpi-delta.negative {
+    color: #f87171;
+    background: rgba(248,113,113,0.12);
+  }
+
+  /* Sparkline row */
+  .kpi-chart {
+    margin-top: 4px;
+  }
+
+  .kpi-chart svg {
+    display: block;
+    width: 100%;
+    height: 48px;
+  }
+
+  /* Divider */
+  .kpi-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 4px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(255,255,255,0.08);
+  }
+
+  .kpi-footer-label {
+    font-size: 11px;
+    color: rgba(255,255,255,0.55);
+    font-weight: 400;
+  }
+
+  .kpi-footer-value {
+    font-family: 'Geist Mono', monospace;
+    font-size: 12px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    color: rgba(255,255,255,0.75);
+  }
+
+  /* BETA chip — micro-delight */
+  .kpi-badge {
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    color: rgba(255,255,255,0.50);
+    background: rgba(255,255,255,0.08);
+    padding: 1px 6px;
+    border-radius: 4px;
+    text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+
+<div class="kpi-tile">
+  <div class="rim"></div>
+  <div class="inner-light"></div>
+  <div class="corner-glint"></div>
+
+  <div class="kpi-content">
+    <!-- Header -->
+    <div class="kpi-header">
+      <span class="kpi-label">Monthly Recurring Revenue</span>
+      <span class="kpi-period">28d</span>
+    </div>
+
+    <!-- Value + Delta -->
+    <div class="kpi-value-row">
+      <span class="kpi-value">$48,376</span>
+      <span class="kpi-delta positive">
+        <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
+          <path d="M4 0.5L7.5 6H0.5L4 0.5Z" fill="#4ade80"/>
+        </svg>
+        3.2%
+      </span>
+      <span class="kpi-badge">MRR</span>
+    </div>
+
+    <!-- Sparkline (28 daily data points) -->
+    <div class="kpi-chart">
+      <svg viewBox="0 0 292 48" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+        <!-- Gradient fill under line -->
+        <defs>
+          <linearGradient id="mrr-fill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="rgba(99,102,241,0.35)" />
+            <stop offset="100%" stop-color="rgba(99,102,241,0)" />
+          </linearGradient>
+        </defs>
+        <!-- Area fill -->
+        <path d="M0,38 L10,36 L20,37 L30,34 L40,35 L50,31 L60,28 L70,30 L80,27 L90,25 L100,26 L110,23 L120,24 L130,21 L140,22 L150,19 L160,17 L170,18 L180,15 L190,16 L200,13 L210,11 L220,12 L230,9 L240,10 L250,7 L260,8 L270,5 L280,6 L290,4 L292,4 L292,48 L0,48 Z" fill="url(#mrr-fill)" />
+        <!-- Line -->
+        <path d="M0,38 L10,36 L20,37 L30,34 L40,35 L50,31 L60,28 L70,30 L80,27 L90,25 L100,26 L110,23 L120,24 L130,21 L140,22 L150,19 L160,17 L170,18 L180,15 L190,16 L200,13 L210,11 L220,12 L230,9 L240,10 L250,7 L260,8 L270,5 L280,6 L290,4"
+              fill="none" stroke="rgba(129,140,248,0.85)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+        <!-- End dot -->
+        <circle cx="290" cy="4" r="2.5" fill="rgba(129,140,248,0.95)" />
+      </svg>
+    </div>
+
+    <!-- Footer — extra stats -->
+    <div class="kpi-footer">
+      <span class="kpi-footer-label">Avg daily growth</span>
+      <span class="kpi-footer-value">+$53 / d</span>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

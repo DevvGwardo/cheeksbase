@@ -658,6 +658,19 @@ class SyncEngine:
             # Fallback to original row-by-row if pandas fails
             return self._list_to_duckdb_fallback(data, table_name, primary_key)
 
+    @staticmethod
+    def _sanitize_column_key(raw: str) -> str:
+        """Turn an arbitrary API key into a safe SQL identifier.
+
+        Replaces non-alphanumeric characters with underscores, strips leading
+        digits, and collapses runs of underscores.  Never trusts raw API data
+        as a column name — keys can contain anything.
+        """
+        sanitized = re.sub(r'[^A-Za-z0-9_]', '_', raw).strip('_')
+        if not sanitized or sanitized[0].isdigit():
+            sanitized = f"col_{sanitized}" if sanitized else "col"
+        return sanitized.lower()
+
     def _list_to_duckdb_fallback(self, data: list[dict], table_name: str, primary_key: str) -> duckdb.DuckDBPyConnection:
         """Fallback: original row-by-row insertion for when pandas is unavailable."""
         if not data:
@@ -667,6 +680,19 @@ class SyncEngine:
         all_keys: set[str] = set()
         for record in data:
             all_keys.update(record.keys())
+
+        # Sanitize raw keys → safe SQL identifiers (deduplicate collisions)
+        key_map: dict[str, str] = {}
+        seen: set[str] = set()
+        for key in sorted(all_keys):
+            safe = self._sanitize_column_key(key)
+            if safe in seen:
+                n = 2
+                while f"{safe}_{n}" in seen:
+                    n += 1
+                safe = f"{safe}_{n}"
+            seen.add(safe)
+            key_map[key] = safe
 
         # Create a list of tuples for DuckDB
         rows = []
@@ -679,9 +705,10 @@ class SyncEngine:
                 row.append(value)
             rows.append(tuple(row))
 
-        # Create column definitions
+        # Create column definitions (safe identifiers only)
         columns = []
         for key in sorted(all_keys):
+            safe_key = key_map[key]
             sample_value = data[0].get(key)
             if isinstance(sample_value, bool):
                 col_type = "BOOLEAN"
@@ -693,7 +720,7 @@ class SyncEngine:
                 col_type = "JSON"
             else:
                 col_type = "VARCHAR"
-            columns.append(f'"{key}" {col_type}')
+            columns.append(f'"{safe_key}" {col_type}')
 
         create_sql = f'CREATE TABLE "{table_name}" ({", ".join(columns)})'
         self.db.conn.execute(create_sql)

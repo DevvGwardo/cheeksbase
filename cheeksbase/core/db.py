@@ -714,36 +714,11 @@ class CheeksbaseDB:
         return True
 
     def shared_search(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
-        """Search shared memories by keyword or vector similarity.
-        If embeddings exist in the table, attempts vector similarity search
-        first (requires DuckDB VSS extension). Falls back to keyword ILIKE."""
-        # Try vector search if any embeddings exist
-        try:
-            has_embeddings = self.query(
-                f"SELECT 1 FROM {META_SCHEMA}.shared_memory "
-                f"WHERE embedding IS NOT NULL LIMIT 1"
-            )
-            if has_embeddings:
-                # Use a simple keyword-to-embedding bridge: search by ILIKE
-                # to find candidates, then rank by embedding similarity if available.
-                # Full semantic search requires an embedding model on the caller side.
-                pattern = f"%{query}%"
-                return self.query(
-                    f"SELECT *, "
-                    f"  CASE WHEN embedding IS NOT NULL "
-                    f"    THEN array_cosine_similarity(embedding, embedding) "
-                    f"    ELSE 0 END as score "
-                    f"FROM {META_SCHEMA}.shared_memory "
-                    f"WHERE key ILIKE ? "
-                    f"   OR value ILIKE ? "
-                    f"   OR tags ILIKE ? "
-                    f"ORDER BY updated_at DESC LIMIT ?",
-                    [pattern, pattern, pattern, limit],
-                )
-        except Exception:
-            pass  # VSS not available, fall through to keyword search
+        """Search shared memories by keyword across keys, values, and tags.
 
-        # Keyword fallback
+        For semantic (vector) search, use ``search_shared_semantic`` instead —
+        it accepts a query embedding for real cosine-similarity ranking.
+        """
         pattern = f"%{query}%"
         return self.query(
             f"SELECT * FROM {META_SCHEMA}.shared_memory "

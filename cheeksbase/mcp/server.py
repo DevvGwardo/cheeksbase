@@ -748,9 +748,10 @@ def create_server() -> FastMCP:
         engine = QueryEngine(db)
         connectors = engine.list_connectors().get("connectors", [])
 
-    print("Cheeksbase MCP server ready.", flush=True)
+    import sys
+    print("Cheeksbase MCP server ready.", file=sys.stderr, flush=True)
     for s in connectors:
-        print(f"  {s['name']}: {s['table_count']} tables, {s['total_rows']:,} rows", flush=True)
+        print(f"  {s['name']}: {s['table_count']} tables, {s['total_rows']:,} rows", file=sys.stderr, flush=True)
 
     server = FastMCP("cheeksbase", instructions=instructions)
 

@@ -98,7 +98,9 @@ class MutationEngine:
         sql = record["sql_text"]
         schema = record["connector_name"]  # stored schema name == connector name
 
-        connector_config = self._load_connector_config(schema)
+        raw_config = self._load_connector_config(schema)
+        # Resolve the template so write-back gets base_url, resources, auth, etc.
+        connector_config = self._resolve_config(raw_config) if raw_config else None
 
         self._mark_confirmed(mutation_id)
         exec_result = execute_mutation(sql, connector_config, self.db)
@@ -215,3 +217,16 @@ class MutationEngine:
             return None
         connectors = get_connectors()
         return connectors.get(schema)
+
+    @staticmethod
+    def _resolve_config(raw: dict[str, Any]) -> dict[str, Any] | None:
+        """Resolve a raw connector entry into a merged config usable for write-back.
+
+        Merges the connector YAML template (base_url, resources, auth, endpoint)
+        with user overrides and credentials so executor.py can find what it needs.
+        """
+        try:
+            from cheeksbase.connectors.registry import resolve_source_config
+            return resolve_source_config(raw)
+        except (ImportError, ValueError):
+            return None
