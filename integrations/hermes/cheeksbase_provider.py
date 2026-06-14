@@ -193,11 +193,18 @@ class CheeksbaseMemoryProvider(MemoryProvider):
                 return ""
             lines = ["## Cheeksbase Memory"]
             for r in results:
-                key = r.get("key", "")
-                value = r.get("value", "")
+                kind = r.get("kind") or "durable"
+                key = r.get("key") or ""
+                value = r.get("value") or ""
                 if isinstance(value, str) and len(value) > 220:
                     value = value[:217] + "..."
-                lines.append(f"- **{key}**: {value}")
+                # Mirror rows carry a synthetic hermes:builtin:* key (an internal
+                # content hash) with no recall value — surface just the fact.
+                # Durable rows have a human-chosen key worth showing as a label.
+                if kind == "mirror" or not key:
+                    lines.append(f"- {value}")
+                else:
+                    lines.append(f"- **{key}**: {value}")
             return "\n".join(lines)
         except Exception as e:
             logger.debug("cheeksbase prefetch failed: %s", e)
