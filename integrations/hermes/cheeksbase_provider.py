@@ -127,6 +127,8 @@ class CheeksbaseMemoryProvider(MemoryProvider):
         self._agent_identity: str = "hermes"
         self._turn_counter: int = 0
         self._prefetch_limit = int(self._config.get("prefetch_limit", 5))
+        # Last-reconciled mtime per built-in target; gates on_turn_start work.
+        self._mirror_mtimes: dict[str, float] = {}
 
     @property
     def name(self) -> str:
@@ -356,18 +358,47 @@ class CheeksbaseMemoryProvider(MemoryProvider):
         except Exception as e:
             logger.debug("cheeksbase mirror reconcile failed: %s", e)
 
+    def on_turn_start(self, turn_number: int, message: str, **kwargs: Any) -> None:
+        """Catch built-in memory edits we aren't notified about (notably 'remove').
+
+        run_agent only bridges add/replace to ``on_memory_write`` and never
+        passes the prior text, so a removed or externally-edited MEMORY.md /
+        USER.md entry would otherwise linger in recall. This runs each turn
+        BEFORE prefetch, but only reconciles a target whose source-file mtime
+        changed since the last reconcile — so the steady-state cost is two
+        stat() calls and no DB open.
+        """
+        if not self._db_path:
+            return
+        changed = [
+            t for t in ("memory", "user")
+            if self._mirror_source_mtime(t) != self._mirror_mtimes.get(t)
+        ]
+        if not changed:
+            return
+        try:
+            with self._open() as db:
+                for target in changed:
+                    self._reconcile_builtin_mirror(db, target)
+        except Exception as e:
+            logger.debug("cheeksbase turn-start mirror reconcile failed: %s", e)
+
     def _reconcile_builtin_mirror(self, db: Any, target: str) -> None:
         """Make the ``mirror`` rows for *target* equal the current built-in store.
 
         Reads the live MEMORY.md / USER.md entries via the built-in MemoryStore
         (reusing its parser), clears the existing mirror rows for *target*, and
-        re-inserts the current entries with stable content-hashed keys.
+        re-inserts the current entries with stable content-hashed keys. Records
+        the source-file mtime so ``on_turn_start`` can skip unchanged targets.
         """
         import hashlib
         try:
             from tools.memory_tool import MemoryStore
         except Exception:
             return  # built-in memory not available; nothing to mirror
+        # Capture mtime up front so a write that races this reconcile is
+        # re-detected next turn rather than missed.
+        mtime = self._mirror_source_mtime(target)
         store = MemoryStore()
         store.load_from_disk()
         entries = store.user_entries if target == "user" else store.memory_entries
@@ -386,6 +417,20 @@ class CheeksbaseMemoryProvider(MemoryProvider):
                 kind="mirror",
                 tags=f"hermes,builtin,{target}",
             )
+        self._mirror_mtimes[target] = mtime
+
+    @staticmethod
+    def _mirror_source_filename(target: str) -> str:
+        return "USER.md" if target == "user" else "MEMORY.md"
+
+    def _mirror_source_mtime(self, target: str) -> float:
+        """mtime of the built-in source file for *target*, or 0.0 if absent."""
+        try:
+            from tools.memory_tool import get_memory_dir
+            path = get_memory_dir() / self._mirror_source_filename(target)
+            return path.stat().st_mtime if path.exists() else 0.0
+        except Exception:
+            return 0.0
 
     # ── Setup wizard config schema ──────────────────────────────────────
 
