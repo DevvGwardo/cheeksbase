@@ -104,6 +104,33 @@ class TestSharedMemoryForget:
         assert result is True
 
 
+class TestSharedMemoryForgetPrefix:
+    """Tests for shared_forget_prefix (bulk delete by key prefix)."""
+
+    def test_forget_prefix_basic(self, temp_db):
+        temp_db.shared_remember("a", "ns:one", "v1")
+        temp_db.shared_remember("a", "ns:two", "v2")
+        temp_db.shared_remember("a", "other:x", "v3")
+        deleted = temp_db.shared_forget_prefix("ns:")
+        assert deleted == 2
+        assert temp_db.shared_recall("ns:one") is None
+        assert temp_db.shared_recall("ns:two") is None
+        assert temp_db.shared_recall("other:x") is not None
+
+    def test_forget_prefix_kind_filter(self, temp_db):
+        temp_db.shared_remember("a", "ns:m", "mirror val", kind="mirror")
+        temp_db.shared_remember("a", "ns:d", "durable val", kind="durable")
+        deleted = temp_db.shared_forget_prefix("ns:", kind="mirror")
+        assert deleted == 1
+        assert temp_db.shared_recall("ns:m") is None
+        assert temp_db.shared_recall("ns:d") is not None
+
+    def test_forget_prefix_no_match(self, temp_db):
+        temp_db.shared_remember("a", "keep:me", "v")
+        assert temp_db.shared_forget_prefix("absent:") == 0
+        assert temp_db.shared_recall("keep:me") is not None
+
+
 class TestSharedMemorySearch:
     """Tests for shared_search (keyword matching)."""
 

@@ -754,6 +754,33 @@ class CheeksbaseDB:
         )
         return True
 
+    def shared_forget_prefix(self, key_prefix: str, kind: str | None = None) -> int:
+        """Delete shared memory entries whose key starts with *key_prefix*.
+
+        Optionally restrict to a single *kind*. Returns the number deleted.
+        Used to reconcile a derived set of entries (e.g. built-in memory
+        mirrored from MEMORY.md / USER.md) by clearing the old set before
+        re-inserting the current one.
+        """
+        like = (
+            key_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            + "%"
+        )
+        where = "key LIKE ? ESCAPE '\\'"
+        params: list[Any] = [like]
+        if kind is not None:
+            where += " AND kind = ?"
+            params.append(kind)
+        count_rows = self.query(
+            f"SELECT COUNT(*) AS cnt FROM {META_SCHEMA}.shared_memory WHERE {where}",
+            params,
+        )
+        count = int(count_rows[0]["cnt"]) if count_rows else 0
+        self.execute(
+            f"DELETE FROM {META_SCHEMA}.shared_memory WHERE {where}", params
+        )
+        return count
+
     def shared_search(
         self,
         query: str,

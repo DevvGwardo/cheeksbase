@@ -143,9 +143,15 @@ class CheeksbaseMemoryProvider(MemoryProvider):
         self._db_path = _resolve_db_path(self._config)
         self._session_id = session_id
         self._agent_identity = kwargs.get("agent_identity") or "hermes"
-        # Ensure schema exists by opening once (creates tables on first use).
-        with self._open():
-            pass
+        # Ensure schema exists and reconcile the built-in memory mirror so that
+        # facts removed or edited while we weren't running don't linger in
+        # recall (the built-in tool never notifies us on 'remove').
+        try:
+            with self._open() as db:
+                for target in ("memory", "user"):
+                    self._reconcile_builtin_mirror(db, target)
+        except Exception as e:
+            logger.debug("cheeksbase initial mirror reconcile failed: %s", e)
         logger.info("cheeksbase memory ready at %s (agent=%s)", self._db_path, self._agent_identity)
 
     def shutdown(self) -> None:
@@ -330,25 +336,56 @@ class CheeksbaseMemoryProvider(MemoryProvider):
         content: str,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        """Mirror MEMORY.md / USER.md writes into cheeksbase shared memory."""
-        if not content or not self._db_path:
+        """Reconcile mirrored built-in memory after a MEMORY.md / USER.md write.
+
+        The built-in memory tool only notifies us on ``add``/``replace`` (never
+        ``remove``) and does not pass the prior text on ``replace`` — so a
+        targeted single-row update is impossible. Instead we rebuild the mirror
+        set for *target* from the current on-disk built-in store: drop the old
+        mirror rows and re-insert the current entries. This keeps mirror rows in
+        sync (no stale or duplicate entries); ``remove`` is caught by the same
+        reconcile run once at session start (see ``initialize``).
+        """
+        if not self._db_path or target not in ("memory", "user"):
             return
-        if action != "add":
+        if action not in ("add", "replace"):
             return
-        scope = "targeted" if target == "user" else "broadcast"
-        key = f"hermes:builtin:{target}:{abs(hash(content)) % (10**12):012d}"
         try:
             with self._open() as db:
-                db.shared_remember(
-                    source_agent=self._agent_identity,
-                    key=key,
-                    value=self._truncate(content, 1500),
-                    scope=scope,
-                    kind="mirror",
-                    tags=f"hermes,builtin,{target}",
-                )
+                self._reconcile_builtin_mirror(db, target)
         except Exception as e:
-            logger.debug("cheeksbase on_memory_write mirror failed: %s", e)
+            logger.debug("cheeksbase mirror reconcile failed: %s", e)
+
+    def _reconcile_builtin_mirror(self, db: Any, target: str) -> None:
+        """Make the ``mirror`` rows for *target* equal the current built-in store.
+
+        Reads the live MEMORY.md / USER.md entries via the built-in MemoryStore
+        (reusing its parser), clears the existing mirror rows for *target*, and
+        re-inserts the current entries with stable content-hashed keys.
+        """
+        import hashlib
+        try:
+            from tools.memory_tool import MemoryStore
+        except Exception:
+            return  # built-in memory not available; nothing to mirror
+        store = MemoryStore()
+        store.load_from_disk()
+        entries = store.user_entries if target == "user" else store.memory_entries
+        scope = "targeted" if target == "user" else "broadcast"
+        prefix = f"hermes:builtin:{target}:"
+        db.shared_forget_prefix(prefix, kind="mirror")
+        for entry in entries:
+            if not entry:
+                continue
+            digest = hashlib.sha1(entry.encode("utf-8")).hexdigest()[:12]
+            db.shared_remember(
+                source_agent=self._agent_identity,
+                key=f"{prefix}{digest}",
+                value=self._truncate(entry, 1500),
+                scope=scope,
+                kind="mirror",
+                tags=f"hermes,builtin,{target}",
+            )
 
     # ── Setup wizard config schema ──────────────────────────────────────
 
