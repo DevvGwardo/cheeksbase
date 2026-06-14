@@ -165,6 +165,7 @@ CREATE TABLE IF NOT EXISTS {META_SCHEMA}.shared_memory (
     scope VARCHAR NOT NULL DEFAULT 'broadcast',
     key VARCHAR NOT NULL UNIQUE,
     value VARCHAR NOT NULL,
+    kind VARCHAR NOT NULL DEFAULT 'durable',
     embedding FLOAT[] DEFAULT NULL,
     tags VARCHAR DEFAULT NULL,
     created_at TIMESTAMP DEFAULT now(),
@@ -270,6 +271,8 @@ CREATE INDEX IF NOT EXISTS idx_shared_memory_tags
 CREATE INDEX IF NOT EXISTS idx_shared_memory_expires
     ON {META_SCHEMA}.shared_memory(expires_at);
 """
+# NOTE: the index on shared_memory.kind is created in _init_metadata, AFTER the
+# ALTER that adds the column — existing DBs lack the column at INIT_SQL time.
 
 
 _META_TABLES = [
@@ -331,6 +334,37 @@ class CheeksbaseDB:
                 self.conn.execute(col_sql)
             except duckdb.CatalogException:
                 pass  # Column already exists (older DuckDB without IF NOT EXISTS)
+
+        # Migration: classify shared_memory rows by kind so recall can pull
+        # durable facts only and ignore per-turn session transcript dumps.
+        try:
+            self.conn.execute(
+                "ALTER TABLE _cheeksbase.shared_memory "
+                "ADD COLUMN IF NOT EXISTS kind VARCHAR DEFAULT 'durable'"
+            )
+        except duckdb.CatalogException:
+            pass  # Column already exists
+        # Idempotent backfill: only touches rows still mislabeled. After the
+        # first run (and for new rows written with an explicit kind) these are
+        # no-ops. Classification is by key scheme written in the Hermes plugin.
+        for backfill_sql in [
+            "UPDATE _cheeksbase.shared_memory SET kind = 'turn' "
+            "WHERE kind <> 'turn' AND key LIKE 'hermes:%:turn:%'",
+            "UPDATE _cheeksbase.shared_memory SET kind = 'mirror' "
+            "WHERE kind <> 'mirror' AND key LIKE 'hermes:builtin:%'",
+        ]:
+            try:
+                self.conn.execute(backfill_sql)
+            except Exception:
+                pass  # Backfill is best-effort; recall filtering still works
+        # Index the kind column now that it is guaranteed to exist.
+        try:
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_shared_memory_kind "
+                "ON _cheeksbase.shared_memory(kind, updated_at)"
+            )
+        except Exception:
+            pass
 
         # Auto-cleanup expired entries on startup
         try:
@@ -663,22 +697,29 @@ class CheeksbaseDB:
         tags: str | None = None,
         expires_at: str | None = None,
         embedding: list[float] | None = None,
+        kind: str = "durable",
     ) -> dict[str, Any]:
         """Insert or update a shared memory entry. Returns the stored row as dict.
         If *embedding* is provided, it is stored alongside the entry.
+
+        *kind* classifies the entry for recall filtering: ``durable`` (facts the
+        agent should be reminded of), ``mirror`` (durable facts mirrored from
+        another store), or ``turn`` (per-turn session transcript fragments that
+        must NOT be auto-injected). See ``shared_search`` ``kinds`` filter.
         """
         self.execute(
             f"INSERT INTO {META_SCHEMA}.shared_memory "
-            f"(source_agent, scope, key, value, tags, expires_at) "
-            f"VALUES (?, ?, ?, ?, ?, ?) "
+            f"(source_agent, scope, key, value, kind, tags, expires_at) "
+            f"VALUES (?, ?, ?, ?, ?, ?, ?) "
             f"ON CONFLICT (key) DO UPDATE SET "
             f"  value = excluded.value, "
             f"  source_agent = excluded.source_agent, "
             f"  scope = excluded.scope, "
+            f"  kind = excluded.kind, "
             f"  tags = excluded.tags, "
             f"  expires_at = excluded.expires_at, "
             f"  updated_at = now()",
-            [source_agent, scope, key, value, tags, expires_at],
+            [source_agent, scope, key, value, kind, tags, expires_at],
         )
         if embedding is not None:
             self.store_shared_embedding(key, embedding)
@@ -713,21 +754,40 @@ class CheeksbaseDB:
         )
         return True
 
-    def shared_search(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
+    def shared_search(
+        self,
+        query: str,
+        limit: int = 10,
+        kinds: Sequence[str] | None = None,
+        include_expired: bool = False,
+    ) -> list[dict[str, Any]]:
         """Search shared memories by keyword across keys, values, and tags.
 
         For semantic (vector) search, use ``search_shared_semantic`` instead —
         it accepts a query embedding for real cosine-similarity ranking.
+
+        *kinds* restricts results to the given entry kinds (e.g.
+        ``("durable", "mirror")`` to exclude per-turn session fragments from
+        auto-recall). ``None`` searches all kinds.
+
+        *include_expired* — by default expired entries (``expires_at`` in the
+        past) are excluded; pass ``True`` to ignore expiry.
         """
         pattern = f"%{query}%"
-        return self.query(
+        sql = (
             f"SELECT * FROM {META_SCHEMA}.shared_memory "
-            f"WHERE key ILIKE ? "
-            f"   OR value ILIKE ? "
-            f"   OR tags ILIKE ? "
-            f"ORDER BY updated_at DESC LIMIT ?",
-            [pattern, pattern, pattern, limit],
+            f"WHERE (key ILIKE ? OR value ILIKE ? OR tags ILIKE ?)"
         )
+        params: list[Any] = [pattern, pattern, pattern]
+        if not include_expired:
+            sql += " AND (expires_at IS NULL OR expires_at > current_timestamp)"
+        if kinds:
+            placeholders = ", ".join("?" for _ in kinds)
+            sql += f" AND kind IN ({placeholders})"
+            params.extend(kinds)
+        sql += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
+        return self.query(sql, params)
 
     def store_shared_embedding(self, key: str, embedding: list[float]) -> bool:
         """Store a vector embedding for a shared memory entry.
